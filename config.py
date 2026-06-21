@@ -18,3 +18,29 @@ TOP_K = 4
 
 # --- Paths ---
 DOCS_DIR = "./docs"
+
+# --- Ingestion ---
+# Where the corpus lives. PDFs in this folder get ingested.
+INGEST_CORPUS_DIR = "./docs"
+
+# Debug output root. Per-stage subfolders live underneath.
+# debug/ingestion/ holds per-stage inspection JSONs and the problem_documents/ quarantine.
+INGEST_DEBUG_ROOT = "./debug"
+INGEST_DEBUG_DIR = f"{INGEST_DEBUG_ROOT}/ingestion"
+INGEST_PROBLEM_DIR = f"{INGEST_DEBUG_DIR}/problem_documents"
+
+# Manifest location (produced by scripts/sourcing/fetch_papers.py)
+INGEST_MANIFEST_PATH = "./scripts/sourcing/manifest.json"
+
+# Per-run defaults (CLI flags override these)
+INGEST_DEFAULT_SAMPLE = None     # None = process all documents
+INGEST_DEFAULT_DRY_RUN = False
+INGEST_DEFAULT_DEBUG = False
+
+# --- Ingestion quality gates ---
+# Thresholds for the quality_check heuristics. Tune after first smoke test.
+INGEST_QC_MIN_CHARS = 200
+INGEST_QC_MIN_ALNUM_RATIO = 0.7
+INGEST_QC_EXPECTED_LANGUAGE = "en"
+INGEST_QC_STRUCTURE_MARKERS = ["abstract", "introduction", "conclusion", "references"]
+INGEST_QC_MIN_ABSTRACT_OVERLAP = 0.3

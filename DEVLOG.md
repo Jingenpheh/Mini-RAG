@@ -101,6 +101,176 @@ The system prompt went through three iterations. This is the part of the project
 
 ---
 
+## Document Sourcing
+
+The original AMD blog corpus did the job for the first version of the agent but it's the wrong shape for stress-testing real RAG. Five short blog posts mostly about one company won't surface ingestion or retrieval problems. To push the system further, I needed a bigger corpus made of harder documents.
+
+I went with arXiv research papers in ML/AI categories. The choice felt simple and hard at the same time.
+
+Simple, because arXiv has a public API and direct PDF URLs. No auth, no scraping, no fragile HTML, no rate-limit pain at moderate use. A script that pulls papers by category and date range and deduplicates against a local manifest covers the whole pipeline.
+
+Hard, because research papers are exactly the kind of document that breaks naive RAG. They run 8 to 30 pages. Layout is non-standard: two-column text, figures with captions, dense tables of benchmark results, equations referenced inline from the prose. Naive text extraction loses most of the structure. Embeddings on flat token streams miss what matters most (figure context, table row meaning, equation references). This is exactly the corpus that will force me to engage with multimodal extraction, layout-aware parsing, and table handling rather than skip them as "future work".
+
+### Fetcher
+
+Built the fetcher at `scripts/sourcing/fetch_papers.py`. Default config pulls from `cs.AI`, `cs.LG`, `cs.CL`, `cs.CV`, `cs.IR`, `stat.ML`, up to 50 results per run, papers submitted in the last 30 days. First run brought down 50 papers from June 2026.
+
+Deduplication is by canonical arXiv ID (stripping any version suffix like `v2`). A manifest at `scripts/sourcing/manifest.json` tracks what's been downloaded. Re-runs only pick up new papers.
+
+The script uses `arxiv` 4.x. An earlier issue: `Result.download_pdf()` was removed in arxiv 4.0, so the script now downloads via `urllib.request.urlretrieve(result.pdf_url, ...)` directly. Works across older and newer versions of the library.
+
+### Folder placement
+
+First iteration put the script under `docs/sourcing/`, next to the data. That felt off after a few minutes of looking at it. `docs/` is supposed to be data the RAG reads. Mixing scripts in there blurs that role.
+
+Moved to `scripts/sourcing/`. The rule I settled on:
+
+- `docs/` is data the RAG reads
+- `scripts/` is utilities the developer runs outside the RAG runtime
+- `tools/` is what the agent calls during a session
+
+Three folders, three clear roles. Future utility scripts (eval runners, migrations, etc.) can sit alongside `sourcing/` under `scripts/`.
+
+### Dependency isolation
+
+`arxiv` is a sourcing-only dependency. The RAG runtime doesn't need it. I put it in a `[dependency-groups.sourcing]` group in `pyproject.toml` so the main runtime stays lean. Anyone cloning the repo runs `uv sync --group sourcing` only if they want to fetch papers.
+
+This also lines up with the longer-term plan: when an upstream agentic pipeline takes over and pushes documents in directly, the whole `scripts/sourcing/` folder and its dependency group can be deleted without touching anything in the RAG core.
+
+### Git hygiene
+
+PDFs are not tracked in git. Corpus is reproducible via the fetcher (or via the upstream pipeline later), and the PDFs are large. Added `docs/`, `.claude/`, and `scripts/sourcing/manifest.json` to `.gitignore`. The legacy AMD PDFs were also untracked at this point. They live in `docs/legacy/` for reference but won't be committed.
+
+---
+
+## Ingestion Design
+
+Picking up from Document Sourcing. Once the corpus changed from AMD blog posts to arXiv research papers, the original ingestion pipeline stopped fitting. PyPDFLoader works for prose. It breaks on the multi-column layout, tables, figures, and equations that papers actually contain. Most of the design questions in this section came from "what do I do with these papers" rather than abstract architecture work.
+
+### Metadata
+
+My starting mental model was that metadata gets generated during embedding. That's wrong. Embedding only produces a vector. Metadata is everything else about a chunk: where it came from, when, what kind, what hierarchy it belongs to. It gets assembled separately and stored next to the vector in the same record.
+
+A vector DB record looks like:
+
+```
+{
+  id: "chunk_8432",
+  vector: [0.034, -0.12, ...],
+  text: "We observed a 40% reduction in P99 latency...",
+  metadata: {
+    arxiv_id: "2606.20563",
+    title: "JanusMesh: Fast and Zero-Shot 3D Visual Illusion Generation...",
+    primary_category: "cs.CV",
+    published: "2026-06-18",
+    page: 7,
+    section: "Method",
+    parent_chunk_id: "chunk_8430",
+    ...
+  }
+}
+```
+
+The manifest at `scripts/sourcing/manifest.json` is the join table. When ingestion processes a paper, it loads the manifest entry by `arxiv_id` and attaches the intrinsic metadata (title, authors, abstract, categories, primary_category, published, updated, filename) to every chunk that paper produces. None of this requires an LLM call or anything clever. The information is already in the manifest from the sourcing step.
+
+Reading around how teams structure metadata, the cleanest way to think about it is four sources, assembled at different points in the pipeline:
+
+- **Intrinsic**: comes from the manifest. Free.
+- **Parse-time**: extracted by the parser (page, section, region_type, bounding box).
+- **Derived**: computed by code or small LLM calls (chunk_id, parent_chunk_id, char_count, document_summary).
+- **Manual / external**: set by config or by the run itself (pipeline_commit, config_hash, ingested_at).
+
+Some derived fields are worth the cost, some aren't.
+
+**Document summary**: yes. One LLM call per paper, about $0.005 for the whole 50-paper corpus. Every chunk gets a doc-level summary attached, which gives the LLM something to anchor a retrieved chunk to during generation. Cheap and useful.
+
+**Per-chunk enrichment** (chunk summaries, contextual chunking prefixes in the Anthropic style): skipping for now. The cost scales with the number of chunks, which is around three thousand on this corpus and millions at any enterprise scale. The retrieval-quality benefit is real but uncertain. With no eval set yet to measure whether it helps, the cost isn't worth paying.
+
+**PII detection**: planning to wire up Microsoft Presidio. It's local, free, regex + spaCy NER based, no LLM calls. For the arXiv corpus there's nothing to detect, but for an enterprise version this matters and surfacing it in the pipeline is the right signal that I considered it. Important caveat: Presidio detects PII. It doesn't act on it. Whatever the system does with a detection (redact, restrict access, drop the chunk) is a separate decision and a separate piece of code I'd have to write.
+
+**Pipeline versioning** (a manual/external field worth its own treatment): each chunk gets stamped with which version of the ingestion pipeline produced it, so later I can do things like "re-ingest anything older than version X" after I change chunking or parsing.
+
+The obvious approach was a `pipeline_version = "v1.0"` constant that I bump manually whenever I change something meaningful. The problem with this is that manual bumping is the kind of discipline that works for the first month and then silently rots. People forget. Tiny changes don't get logged. The metadata starts lying.
+
+Looking at how production teams handle this, the pattern is to drop the manual version entirely and use two auto-populated fields instead:
+
+- `pipeline_commit`: the current git SHA, captured by running `git rev-parse --short HEAD` at ingestion start.
+- `config_hash`: a SHA-256 of the JSON-serialized values of the ingestion-relevant config (embedding model, chunk size, overlap, parser choice, chunking strategy).
+
+The git SHA tells me exactly what committed code ran. The config hash tells me what config it ran with, including uncommitted experimental changes. Together they tell me which chunks were produced under which conditions, with no human discipline required.
+
+It's not a perfect substitute for a real semantic version. If I change something inside `ingest.py` without touching the config dict, the config hash won't move and only the git SHA will. Pattern coverage is roughly 80%. For a solo project that's enough. The point was to avoid metadata that I know will be unreliable.
+
+### Parser choice
+
+PyPDFLoader was right for the AMD blog corpus and wrong for research papers. Blogs are single-column prose. Papers are two-column with figures, tables, and equations. PyPDF strips all of that out and hands back word-soup that loses most of the document's structure.
+
+Two parsers are realistic alternatives: Docling (IBM, free, runs locally) and LlamaParse (LlamaIndex, paid above a free tier, cloud API). On research papers specifically both produce good output. The decision came down to:
+
+- Docling runs locally. No data leaves the machine, no API key, no recurring cost.
+- LlamaParse premium edges ahead on the hardest documents (financial reports, slide decks with infographics), but the gap on papers is small.
+- For a portfolio project the "I ran it locally" story is stronger than "I paid an API."
+
+So Docling, via the `langchain-docling` package because it wraps Docling's output in LangChain's Document interface and makes it a near-drop-in replacement for `PyPDFLoader`. If later I want Docling's lower-level API for custom chunking or VLM-driven figure captioning, I can call docling directly.
+
+LlamaParse stays in mind for two cases: (1) documents Docling visibly fails on, (2) a future demo where I want to show routing across multiple parsers.
+
+### Routing
+
+The routing question came up naturally from "Docling won't handle every document type." Real corporate inputs include scanned forms, slides, handwritten notes, CAD outputs, financial statements with footnote graphs. None of these route to "send to Docling and hope."
+
+Reading around how production RAG systems handle this, the pattern is a routing layer that inspects the input and picks the right tool: file extension covers a lot (`.docx`, `.xlsx`, `.pptx`), a text-layer check distinguishes digital from scanned PDFs, folder structure helps, and for ambiguous cases you call a small classifier or VLM.
+
+I'm not building any of that yet. The reasons:
+
+- I have one document type. There's nothing to route to.
+- Designing routing for documents I don't have is premature abstraction. I'd guess the wrong axes.
+- The work distracts from things that matter more right now.
+
+The compromise is a structural reservation. All ingestion calls go through one function `parse_document(path)` that currently just calls Docling. When routing becomes real, only that function changes. Everything calling it stays the same. The function carries a `TODO` comment so future me knows the design space was considered.
+
+### Quality gates and error handling
+
+Routing leads directly to: what happens if the parser is wrong for the document, or the right parser parses something subtly broken? Most parsers don't fail loudly. They return text regardless of whether the text is meaningful, and that gibberish gets chunked, embedded, and lands in the vector DB where it pollutes future queries.
+
+The pattern teams use to catch this is quality gates: after the parser returns and before the chunker runs, a small function inspects the parsed output for signs of trouble:
+
+- Character count below a threshold (extracted almost nothing).
+- Low alphanumeric-to-total ratio (likely garbled).
+- Language detection mismatch via `langdetect`.
+- Missing structure markers a research paper should contain (Abstract, Introduction, Conclusion, References).
+- Abstract-overlap check: compare the words in the manifest's known abstract to the extracted text. If the overlap is too low, the parser didn't pull the paper meaningfully.
+
+If any of these fail, the document is treated as failed. It doesn't get chunked, doesn't get embedded, doesn't reach the vector DB. Instead it moves into a quarantine folder at `debug/ingestion/problem_documents/`, alongside a JSONL report with the same base name (`<arxiv_id>_failure_report.jsonl`) listing the failure reasons. Opening the folder, you see the PDF and its diagnosis side by side. No grep through a master log.
+
+If someone inspects a problem document and decides it was a false alarm (or fixes the underlying issue), they move the PDF back into `docs/` and the next ingestion run picks it up. Fully reversible.
+
+The principle is loud failure preferred over silent pollution. Better to skip a document and surface it for review than to let bad content silently degrade the retrieval quality of the whole index.
+
+### Pipeline order
+
+Parse → QC → chunk → embed → store. QC sits between parsing and chunking so the pipeline bails out before doing chunking work on garbage. There's a small chunk-level QC pass possible after chunking (catch empty chunks, etc.) but it's cleanup, not the main gate.
+
+### Checkpointing and inspection
+
+For inspection during development, the ingestion orchestrator takes three flags:
+
+- `sample`: process only the first N documents.
+- `dry_run`: skip writing to the vector DB.
+- `debug_dir`: when set, write per-stage outputs as JSON for inspection.
+
+Running with all three on a single paper shows exactly what each stage produced. Running with none of them is production mode. This gives me the factory-floor inspection window without leaving artifacts in production runs.
+
+All inspection output lands in `debug/`, which is gitignored. Per-stage subfolders (`debug/ingestion/`, eventually `debug/chunking/` and so on) keep different stages separated as the project grows. The discipline is "debug outputs are throwaway, written only when explicitly requested." Periodic cleanup is a one-liner:
+
+```bash
+find debug/ -maxdepth 1 -mindepth 1 -mtime +7 -exec rm -rf {} +
+```
+
+Manual chore or wired to a pre-commit hook later.
+
+---
+
 ## Future Improvements
 
 **Semantic chunking.** Use a local embedding model to find meaning boundaries instead of character boundaries, which avoids per-window API cost.
