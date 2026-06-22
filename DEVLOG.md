@@ -247,9 +247,52 @@ If someone inspects a problem document and decides it was a false alarm (or fixe
 
 The principle is loud failure preferred over silent pollution. Better to skip a document and surface it for review than to let bad content silently degrade the retrieval quality of the whole index.
 
+### Chunking
+
+The first version of this project used `RecursiveCharacterTextSplitter` at 500 characters with 100 overlap. That was the right call for the AMD blog corpus where the documents were single-column prose. On research papers it isn't. Papers are arranged in sections and paragraphs by the author, and that structure carries semantic meaning the splitter can't see. Cutting at character count drops you mid-thought half the time, and a chunk that starts at "...this loss function performs" and ends with "...we trained for 100 epochs" lumps two different topics into one muddy embedding.
+
+I looked at five alternatives:
+
+**Semantic chunking.** An embedding model finds boundaries by detecting similarity drops between adjacent sentences. The theoretically clean answer. The cost is embedding every sentence to find the breaks, and the benefit assumes the document has no existing semantic structure to lean on. For research papers the author already imposed semantic boundaries through sections and paragraphs, so this is doing the work twice. It earns its complexity on unstructured text (scraped pages, transcripts, contracts), not on papers.
+
+**Hierarchical chunking with parent-document retrieval.** Embed small leaf chunks (sentences) for precision, return parent chunks (sections) to the LLM for context. The pattern has real benefits in production but doubles storage and adds a parent lookup step on every retrieval. With no eval set yet to prove the gain, the cost isn't worth paying. The schema I went with is forward-compatible so this can be added later without re-ingest if the eval shows we need it.
+
+**LLM-as-chunker.** Pass the document to an LLM and ask it to mark chunk boundaries. The copy-paste failure mode is real (LLMs paraphrase, drop content, mangle special characters), the cost scales linearly with corpus size, and there's no eval evidence the gain justifies it. The boundary-only variant (LLM outputs sentence indices for breaks, never reproducing the text) avoids the copy-paste hazard but still costs per document and isn't justified without baseline numbers.
+
+**Docling's HierarchicalChunker.** What `langchain-docling`'s `DoclingLoader` returns by default. Groups `doc_items` by section under a size budget. Inconsistent in practice: sometimes it groups title + author + affiliation into one front matter chunk (good), sometimes it groups multiple body paragraphs into one super-chunk (muddy). The grouping isn't documented as deterministic.
+
+**Paragraph-level chunking from docling's `DocumentConverter` directly.** What I went with. Skip the HierarchicalChunker and iterate docling's raw `doc_items`. The reasoning: docling's layout model identifies text blocks at the paragraph level. For body content, one `doc_item` is one paragraph. For special structures, one doc_item is one list_item, one formula, one table, one caption. This gives chunking semantics that don't depend on a heuristic grouper.
+
+The implementation iterates doc_items in document order, one chunk per doc_item, with two refinements:
+
+- **Small-item merge.** Consecutive same-section same-label doc_items under 200 characters get merged into a single chunk. This re-creates the good HierarchicalChunker behavior for front matter (title, author, affiliation coalesce) without re-grouping full body paragraphs.
+- **Size safety net.** Chunks under 30 characters get dropped (page numbers, stray artifacts, single-character page headers). Chunks over 2000 characters get split on sentence boundaries.
+
+Section context is preserved by walking the doc_item's parent reference up to the nearest section heading and attaching it as the chunk's `section_heading` metadata.
+
+These choices are calibrated for research papers. Slides, code, contracts, and forms would all need different chunking strategies. The routing branch I left in `parse_document` extends naturally to chunking when those document types arrive. For now there's nothing to route.
+
+### Artifacts: formulas, tables, figures
+
+A research paper isn't just prose. Equations, tables, and figures carry real information and degrade in different ways through PDF parsing.
+
+**Formulas.** Docling's default returns `<!-- formula-not-decoded -->` as a placeholder. Enabling structured formula extraction makes docling attempt LaTeX output. Some papers work, some don't. The cases where it fails: equations rendered as images even in digital PDFs (some LaTeX-to-PDF pipelines do this), complex multi-line equations, custom symbol libraries.
+
+The plan: try extraction. On success, attach the LaTeX to the preceding text chunk, which is the chunk that introduces the equation ("...we define forward diffusion by means of the SDE:"). The embedding reflects the explanation; the LLM sees the formula alongside the explanation when the chunk gets retrieved. On failure (placeholder detected by string match), drop the formula. The preceding text still describes its purpose, so the retrieval signal is preserved.
+
+Why preceding rather than following: the text leading into an equation usually names it ("we define X by the SDE"), which is what a query like "what SDE does the paper use" matches against. The text following an equation typically defines variables ("where X_0 is..."), which works as its own searchable chunk without needing the equation embedded.
+
+**Tables.** Default docling output flattens tables into noisy "key. = value" strings, one per cell, with the 2D relationship lost. Useless for retrieval and bad for an LLM trying to reason about results.
+
+Better: enable docling's structured table extraction, format the result as a markdown table, embed the markdown along with its caption. Markdown preserves the row and column relationships as text, which LLMs handle reasonably well for the small table sizes typical in papers (4-6 columns, under 20 rows). For larger tables the markdown approach degrades; the fallback would be storing tables as separate structured records rather than embedding their text, which is a phase-later decision if the eval shows it matters.
+
+**Figures.** Docling doesn't extract figures by default. Even with extraction enabled, the result is a bounding-box reference, not searchable content. Real figure understanding requires a vision-language model to caption them, which costs roughly $0.001 per figure with gpt-4o-mini vision.
+
+For now, I'm relying on captions. Captions describe what the figure shows ("Figure 3: loss curves for the three baselines"), are independently informative, and are already in the parsed output as `caption` doc_items. A query about figure content matches the caption; an answer cites the paper and page number for the reader to inspect the actual figure. Adding VLM captioning is the upgrade path if the eval surfaces figure-content queries that captions can't answer.
+
 ### Pipeline order
 
-Parse → QC → chunk → embed → store. QC sits between parsing and chunking so the pipeline bails out before doing chunking work on garbage. There's a small chunk-level QC pass possible after chunking (catch empty chunks, etc.) but it's cleanup, not the main gate.
+Parse → QC → PII → chunk → embed → store. QC sits between parsing and chunking so the pipeline bails out before doing chunking work on garbage. PII scrubbing sits between QC and chunking so that any redaction happens before content gets split into chunks (otherwise the same PII might leak across chunk boundaries). PII is currently a passthrough stub; the slot exists so the call site is in the right place when Presidio gets wired up. There's a small chunk-level QC pass possible after chunking (catch empty chunks, etc.) but it's cleanup, not the main gate.
 
 ### Checkpointing and inspection
 
