@@ -13,6 +13,8 @@ dependencies = [
     "python-dotenv==1.1.0",
     "langchain-docling>=1.1.0",
     "langdetect>=1.0.9",
+    "langchain-huggingface>=0.1.0",
+    "sentence-transformers>=3.0.0",
 ]
 
 [dependency-groups]

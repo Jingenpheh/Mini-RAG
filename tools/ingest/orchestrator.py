@@ -322,18 +322,36 @@ def already_ingested(arxiv_id: str, config_hash: str) -> bool:
         config_hash (str): The current run's config hash.
 
     Approach:
-        Phase 3 will implement this by querying Chroma for chunks where
-        metadata.arxiv_id == arxiv_id AND metadata.config_hash == config_hash.
-        If any chunk matches, the document is already ingested under this exact
-        config and should be skipped. Until storage is wired up, this returns
-        False so every document gets processed.
+        Queries Chroma for chunks where metadata.arxiv_id matches AND
+        metadata.config_hash matches. If any match, the document is already
+        ingested under this exact config and should be skipped. A miss can
+        mean the document is new OR the config changed; either way the
+        pipeline re-ingests with the current settings, and the new chunks
+        coexist with old ones under different config_hash values until
+        manually pruned.
 
     Returns:
         bool: True if already ingested under the current config, else False.
     """
-    # TODO: Phase 3 - query the vector store for matching arxiv_id + config_hash.
-    _ = arxiv_id, config_hash  # both consumed in Phase 3; silence unused-param hints
-    return False
+    from tools.utils import get_vector_store
+
+    try:
+        store = get_vector_store()
+        result = store._collection.get(
+            where={
+                "$and": [
+                    {"arxiv_id": arxiv_id},
+                    {"config_hash": config_hash},
+                ]
+            },
+            limit=1,
+        )
+        return bool(result.get("ids"))
+    except Exception:
+        # If the collection doesn't exist yet or the query fails for any
+        # reason, treat the doc as not ingested and let the pipeline run.
+        # The store write itself will surface real persistence failures.
+        return False
 
 
 # ##############################################################################

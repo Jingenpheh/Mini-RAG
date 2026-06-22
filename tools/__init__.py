@@ -18,7 +18,7 @@ def ingest_documents_tool() -> str:
 
 @tool
 def search_knowledge_tool(query: str) -> str:
-    """Search the AMD knowledge base for relevant information about AMD products, strategy, and AI initiatives."""
+    """Search the research-paper knowledge base for relevant content from arXiv ML/AI papers (cs.AI, cs.LG, cs.CL, cs.CV, cs.IR, stat.ML)."""
     return search_knowledge(query)
 
 

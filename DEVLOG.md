@@ -290,6 +290,40 @@ Better: enable docling's structured table extraction, format the result as a mar
 
 For now, I'm relying on captions. Captions describe what the figure shows ("Figure 3: loss curves for the three baselines"), are independently informative, and are already in the parsed output as `caption` doc_items. A query about figure content matches the caption; an answer cites the paper and page number for the reader to inspect the actual figure. Adding VLM captioning is the upgrade path if the eval surfaces figure-content queries that captions can't answer.
 
+### Embedding model
+
+Three categories to choose from: hosted API (OpenAI, Cohere, Voyage), local general-purpose (BGE, E5, mxbai), local domain-specialized (SPECTER2, SciNCL).
+
+OpenAI's `text-embedding-3-small` is the consistent-stack default. The LLM is already OpenAI, so adding the embedding API is one less moving piece. Cheap (around $0.02 per million tokens), reliable, easy to swap. The downside: generic, not tuned for academic papers, fixed at 1536 dimensions.
+
+SPECTER2 (Allen AI) is trained specifically on academic literature. It's 768-dim, runs locally via `sentence-transformers`, no per-token cost, and outperforms general models on academic retrieval benchmarks. Setup cost is one extra dependency (`langchain-huggingface` + `sentence-transformers`) and a one-time model download (~400 MB) into the Hugging Face cache.
+
+I went with SPECTER2. The reasoning:
+
+- The corpus is academic papers. A domain-specialized model is the obvious fit.
+- The cost difference is real but small. OpenAI is about $0.03 to embed 50 papers in ~30 seconds. SPECTER2 is free but takes ~3 to 5 minutes on CPU.
+- The portfolio story is better. "Picked SPECTER2 because it's trained on papers" reads as deliberate. "Used OpenAI" reads as default-tier.
+- The operational cost is one extra dependency, not a meaningful burden for this project.
+
+I deliberately skipped the A/B comparison between SPECTER2 and OpenAI for now. Without an eval set there's no way to attach numbers to the choice, and running both models is the kind of work whose value lands once measurement exists. The trigger to revisit: if Recall@5 on the eval set comes in low after retrieval tuning is exhausted, comparing embedding models becomes the next lever.
+
+The embedder lives behind a shared singleton in `tools/utils.py` so the model loads once per process and is reused by both the ingestion pipeline (embedding chunks) and the retriever (embedding user queries). Lazy init keeps `python -m tools.ingest --help` fast.
+
+A subtle consequence of switching models: vector dimensions are baked into the Chroma collection at creation time. SPECTER2 at 768 dims is incompatible with OpenAI 3-small at 1536. Swapping models means wiping the collection and re-ingesting. The `config_hash` already covers this, so chunks ingested under one model get tagged differently than chunks under another, and dedup would not silently cross models.
+
+### Vector database
+
+The shortlist: Chroma (current), pgvector (Postgres extension), Qdrant (standalone Rust server), Weaviate (standalone, feature-rich), Pinecone (managed cloud), LanceDB (embedded).
+
+I kept Chroma. The reasoning:
+
+- Corpus scale is small. 50 papers × ~60 chunks ≈ 3000 vectors. Every candidate handles this comfortably.
+- Setup cost difference matters. Chroma is `pip install` with data in `./chroma_db/`. pgvector needs a running Postgres container. Qdrant needs a running binary. Pinecone needs an account, an API key, and ongoing cost.
+- Without an eval set, comparing vector DB performance is guessing. The choice between Chroma and (say) Qdrant should be made with numbers, not speculation.
+- The storage layer in this pipeline is one function in one file (`tools/ingest/storage.py`). Swapping backends is an afternoon's work whenever it becomes necessary, and the rest of the code does not care which backend it is hitting.
+
+The trigger to revisit: when the eval set is wired and I want to compare retrieval strategies, Chroma's hybrid search story (BM25 + dense) is the weakest among the candidates. At that point the move would be pgvector (the boring infrastructure choice, SQL filters, hybrid via tsvector) or Qdrant (the best pure-vector experience, native hybrid).
+
 ### Pipeline order
 
 Parse → QC → PII → chunk → embed → store. QC sits between parsing and chunking so the pipeline bails out before doing chunking work on garbage. PII scrubbing sits between QC and chunking so that any redaction happens before content gets split into chunks (otherwise the same PII might leak across chunk boundaries). PII is currently a passthrough stub; the slot exists so the call site is in the right place when Presidio gets wired up. There's a small chunk-level QC pass possible after chunking (catch empty chunks, etc.) but it's cleanup, not the main gate.

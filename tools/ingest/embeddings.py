@@ -1,20 +1,21 @@
 # ##############################################################################
 # File: embeddings.py
-# Purpose: Embedding stage. Phase 3 stub. Will call the embedding model on
-#          chunk texts and return vectors.
+# Purpose: Embedding stage. Runs the configured embedding model over chunk
+#          texts and returns vectors.
 #
 # Contents:
 #   Functions:
-#     embed_chunks()           - Compute embeddings for a list of chunks (stub)
+#     embed_chunks()           - Compute embeddings for a list of chunks
 # ##############################################################################
 
 
 # Local
+from tools.utils import get_embedder
 from tools.ingest.schema import Chunk
 
 
 # ##############################################################################
-# Embedding (stub)
+# Public entry point
 # ##############################################################################
 
 
@@ -25,13 +26,18 @@ def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
         chunks (list[Chunk]): Chunks to embed.
 
     Approach:
-        Phase 3 will call OpenAI's text-embedding-3-small via
-        langchain-openai's OpenAIEmbeddings, batching as needed. The current
-        stub returns empty lists so the rest of the pipeline can be exercised
-        end-to-end during development.
+        Calls the shared embedder singleton from tools.utils so the model
+        loads once per process and is reused at retrieval time too. The
+        embedder's embed_documents API batches under the hood; returned
+        vectors preserve input order so they can be paired with chunks
+        positionally by the caller.
 
     Returns:
-        list[list[float]]: One vector per chunk, in the same order. Currently
-            returns a list of empty lists.
+        list[list[float]]: One vector per chunk, in the same order. Empty list
+            if chunks is empty.
     """
-    return [[] for _ in chunks]
+    if not chunks:
+        return []
+    embedder = get_embedder()
+    texts = [c.text for c in chunks]
+    return embedder.embed_documents(texts)

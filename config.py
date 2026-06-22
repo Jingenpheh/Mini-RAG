@@ -3,7 +3,10 @@ LLM_MODEL = "gpt-4o-mini"
 LLM_TEMPERATURE = 0
 
 # --- Embeddings ---
-EMBEDDING_MODEL = "text-embedding-3-small"
+# SPECTER2 base from Allen AI: 768-dim, domain-specialized for academic papers.
+# Runs locally via sentence-transformers; first use downloads ~400 MB to the
+# Hugging Face cache (~/.cache/huggingface/hub/). No API calls, no per-token cost.
+EMBEDDING_MODEL = "allenai/specter2_base"
 
 # --- Chunking ---
 CHUNK_SIZE = 500       # characters per chunk (~100-125 tokens)
@@ -11,7 +14,7 @@ CHUNK_OVERLAP = 100    # 20% overlap to preserve context across boundaries
 
 # --- Chroma vector store ---
 CHROMA_DIR = "./chroma_db"
-COLLECTION_NAME = "amd_knowledge"
+COLLECTION_NAME = "research_papers"
 
 # --- Retrieval ---
 TOP_K = 4

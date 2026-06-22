@@ -1,38 +1,59 @@
 # ##############################################################################
 # File: storage.py
-# Purpose: Vector store writes. Phase 3 stub. Will write chunk records and
-#          their embeddings into Chroma.
+# Purpose: Vector store writes. Persists chunk records and their pre-computed
+#          embeddings into the Chroma collection.
 #
 # Contents:
 #   Functions:
-#     store_chunks()           - Persist chunks + vectors to the vector store
+#     store_chunks()           - Write chunks + vectors to the vector store
 # ##############################################################################
 
 
 # Local
+from tools.utils import get_vector_store
 from tools.ingest.schema import Chunk
 
 
 # ##############################################################################
-# Storage (stub)
+# Storage
 # ##############################################################################
 
 
 def store_chunks(chunks: list[Chunk], vectors: list[list[float]]) -> int:
-    """Persist chunks and their vectors to the vector store.
+    """Persist chunks and their vectors to the Chroma vector store.
 
     Args:
         chunks (list[Chunk]): Chunk records to store.
         vectors (list[list[float]]): One embedding per chunk, same order.
 
     Approach:
-        Phase 3 will get the Chroma collection from tools.utils.get_vector_store
-        and call collection.add(ids=, documents=, embeddings=, metadatas=) with
-        the chunk_id, text, vector, and to_metadata() of each chunk. The stub
-        is a no-op so the pipeline can be exercised end-to-end during
-        development.
+        Writes through the underlying Chroma collection rather than the
+        LangChain wrapper's `add_documents`, because we already computed
+        embeddings in the embed stage. Going through the wrapper would
+        re-embed on the way in. The wrapper's embedding_function still kicks
+        in at retrieval time for query embedding, which is what we want for
+        consistency between query and document representations.
+
+        Chunk metadata is flattened to Chroma-safe types by Chunk.to_metadata
+        (lists become "; "-joined strings, text and chunk_id excluded).
 
     Returns:
-        int: Number of records written. Currently 0.
+        int: Number of records written.
     """
-    return 0
+    if not chunks:
+        return 0
+    if len(chunks) != len(vectors):
+        raise ValueError(
+            f"chunks ({len(chunks)}) and vectors ({len(vectors)}) length mismatch"
+        )
+
+    store = get_vector_store()
+    collection = store._collection  # underlying Chroma collection for raw add
+
+    collection.add(
+        ids=[c.chunk_id for c in chunks],
+        documents=[c.text for c in chunks],
+        embeddings=vectors,
+        metadatas=[c.to_metadata() for c in chunks],
+    )
+    return len(chunks)
