@@ -68,3 +68,11 @@ CHUNK_INCLUDED_LABELS = ["text", "paragraph", "list_item", "caption", "table", "
 # Marker string docling emits when formula extraction fails. Used to detect
 # failed formulas so they don't get embedded as junk.
 CHUNK_FORMULA_FAILED_MARKER = "formula-not-decoded"
+
+# Chunker behavior version. Bump this whenever chunking semantics change so
+# the config_hash invalidates existing chunks and the dedup check forces
+# re-ingestion.
+#   v1 (initial): dropped formulas with empty docling text silently.
+#   v2 (2026-06-25): falls back to FormulaItem.orig when text is empty,
+#                    recovering formula content across the corpus.
+CHUNKER_VERSION = 2

@@ -80,9 +80,16 @@ def chunk_document(
             current_section = (item.text or "").strip()
             continue
 
-        # Formula: attach to previous candidate if extraction succeeded
+        # Formula: attach to previous candidate if extraction succeeded.
+        # Docling's FormulaItem often has text="" while the raw extracted
+        # content lives in .orig (e.g. "Aff(2) = {(A t 0 1) : A ∈ GL(2,R) ...").
+        # In v1 we dropped these silently; v2 falls back to .orig so equations
+        # land in the index as auxiliary content attached to the preceding
+        # explanation chunk. See DEVLOG > Ingestion Design > Chunking.
         if isinstance(item, FormulaItem):
             text = (item.text or "").strip()
+            if not text:
+                text = (getattr(item, "orig", "") or "").strip()
             if not text or CHUNK_FORMULA_FAILED_MARKER in text:
                 continue
             if candidates:

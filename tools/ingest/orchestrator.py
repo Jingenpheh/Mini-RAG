@@ -275,6 +275,7 @@ def compute_config_hash() -> str:
         CHUNK_MERGE_FLOOR,
         CHUNK_SIZE_CEILING,
         CHUNK_INCLUDED_LABELS,
+        CHUNKER_VERSION,
     )
 
     payload = {
@@ -283,6 +284,7 @@ def compute_config_hash() -> str:
         "chunk_merge_floor": CHUNK_MERGE_FLOOR,
         "chunk_size_ceiling": CHUNK_SIZE_CEILING,
         "chunk_included_labels": sorted(CHUNK_INCLUDED_LABELS),
+        "chunker_version": CHUNKER_VERSION,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True).encode("utf-8")
