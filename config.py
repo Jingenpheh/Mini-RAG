@@ -17,7 +17,10 @@ CHROMA_DIR = "./chroma_db"
 COLLECTION_NAME = "research_papers"
 
 # --- Retrieval ---
-TOP_K = 4
+# Top-k chunks returned by the production retrieve() call. Set to 5 so the
+# eval can compute Recall@1, Recall@3, and Recall@5 from a single retrieval
+# pass without re-querying.
+TOP_K = 5
 
 # --- Paths ---
 DOCS_DIR = "./docs"
