@@ -1,20 +1,26 @@
 # ##############################################################################
 # File: fetch_papers.py
 # Purpose: Download ML/AI research papers from arXiv into the parent docs/
-#          directory, deduplicating against a local manifest.
+#          directory, deduplicating against a local manifest. Provides two
+#          modes: open-ended discovery (fetch_papers) and reproducible eval
+#          corpus retrieval (fetch_eval_corpus).
 #
 # Contents:
 #   Constants:
-#     SCRIPT_DIR               — Absolute path of this script's directory
-#     PAPERS_DIR               — Resolved output directory (from config)
-#     MANIFEST_PATH            — Resolved manifest file path (from config)
+#     SCRIPT_DIR               - Absolute path of this script's directory
+#     PAPERS_DIR               - Resolved output directory (from config)
+#     MANIFEST_PATH            - Resolved manifest file path (from config)
+#     EVAL_CORPUS_LOCK         - Path to scripts/sourcing/eval_corpus.json
 #
 #   Functions:
-#     _resolve()               — Resolve config path (relative or absolute)
-#     load_manifest()          — Read manifest of already-downloaded papers
-#     save_manifest()          — Persist manifest after updates
-#     build_query()            — Compose arXiv query string from config
-#     fetch_papers()           — Main entry: query, dedupe, download, update manifest
+#     _resolve()               - Resolve config path (relative or absolute)
+#     load_manifest()          - Read manifest of already-downloaded papers
+#     save_manifest()          - Persist manifest after updates
+#     build_query()            - Compose arXiv query string from config
+#     fetch_papers()           - Discovery mode: query, dedupe, download, update manifest
+#     fetch_eval_corpus()      - Reproducibility mode: download exact arxiv_ids
+#                                listed in eval_corpus.json
+#     main()                   - CLI entry point with --eval-corpus flag
 # ##############################################################################
 
 
@@ -57,6 +63,7 @@ def _resolve(p: str) -> Path:
 
 PAPERS_DIR = _resolve(_PAPERS_DIR_CFG)
 MANIFEST_PATH = _resolve(_MANIFEST_PATH_CFG)
+EVAL_CORPUS_LOCK = SCRIPT_DIR / "eval_corpus.json"
 
 
 # ##############################################################################
@@ -184,5 +191,127 @@ def fetch_papers() -> None:
     print(f"Manifest total: {len(manifest)} paper(s).")
 
 
+# ##############################################################################
+# Reproducible eval-corpus retrieval
+# ##############################################################################
+
+
+def fetch_eval_corpus() -> None:
+    """Download the exact arXiv papers listed in eval_corpus.json.
+
+    Approach:
+        Reads scripts/sourcing/eval_corpus.json which lists the exact arxiv_ids
+        the Mini-RAG eval set is built against. For each ID, queries the arXiv
+        API by ID (deterministic, not by category/date), downloads the PDF,
+        and writes manifest entries with full metadata. Skips papers already
+        on disk + already in the manifest.
+
+        Use this on a fresh clone to reproduce the eval environment: the
+        golden_set.jsonl references these specific arxiv_ids and won't
+        evaluate against papers it doesn't have.
+
+    Returns:
+        None: Side effects only - writes PDFs to PAPERS_DIR and updates
+            MANIFEST_PATH.
+    """
+
+    # Load the lock file listing the required arxiv_ids
+    if not EVAL_CORPUS_LOCK.exists():
+        print(f"ERROR: lock file not found at {EVAL_CORPUS_LOCK}")
+        print("Cannot reproduce eval corpus without it.")
+        return
+    lock_data = json.loads(EVAL_CORPUS_LOCK.read_text(encoding="utf-8"))
+    arxiv_ids = lock_data.get("arxiv_ids", [])
+    if not arxiv_ids:
+        print("ERROR: eval_corpus.json contains no arxiv_ids.")
+        return
+
+    # Prepare output directory and load existing manifest for dedup
+    PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    manifest = load_manifest()
+
+    print(f"Reproducing eval corpus: {len(arxiv_ids)} paper(s) listed in eval_corpus.json")
+    print()
+
+    # Query arXiv by ID list - deterministic lookup, no date or category filter
+    client = arxiv.Client()
+    search = arxiv.Search(id_list=arxiv_ids)
+
+    # Running tally for the summary line
+    new_count = 0
+    already_present = 0
+    failed = 0
+
+    for result in client.results(search):
+
+        # Canonical arXiv ID (strip version suffix like "v2")
+        arxiv_id = result.entry_id.rsplit("/", 1)[-1].split("v")[0]
+
+        # Skip if PDF already on disk AND in manifest
+        filename = f"{arxiv_id}.pdf"
+        pdf_path = PAPERS_DIR / filename
+        if pdf_path.exists() and arxiv_id in manifest:
+            already_present += 1
+            continue
+
+        # Download the PDF
+        title_preview = result.title.strip().replace("\n", " ")[:80]
+        print(f"  Downloading {arxiv_id}: {title_preview}")
+        try:
+            urllib.request.urlretrieve(result.pdf_url, str(pdf_path))
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            failed += 1
+            continue
+
+        # Record metadata in the manifest
+        manifest[arxiv_id] = {
+            "title": result.title.strip(),
+            "authors": [str(a) for a in result.authors],
+            "abstract": result.summary.strip(),
+            "categories": result.categories,
+            "primary_category": result.primary_category,
+            "published": result.published.isoformat(),
+            "updated": result.updated.isoformat(),
+            "filename": filename,
+        }
+        new_count += 1
+
+    save_manifest(manifest)
+
+    print()
+    print(f"Done. Downloaded {new_count} new paper(s).")
+    print(f"Already present: {already_present}. Failed: {failed}.")
+    print(f"Manifest total: {len(manifest)} paper(s).")
+    print()
+    print("Next step: python -m tools.ingest --debug")
+
+
+# ##############################################################################
+# CLI
+# ##############################################################################
+
+
+def main() -> None:
+    """CLI entry point: choose discovery mode or eval-corpus reproduction mode."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Download arXiv papers for Mini-RAG.",
+    )
+    parser.add_argument(
+        "--eval-corpus",
+        action="store_true",
+        help="Reproduce the exact eval corpus (50 papers listed in eval_corpus.json) "
+             "instead of running open-ended discovery.",
+    )
+    args = parser.parse_args()
+
+    if args.eval_corpus:
+        fetch_eval_corpus()
+    else:
+        fetch_papers()
+
+
 if __name__ == "__main__":
-    fetch_papers()
+    main()
