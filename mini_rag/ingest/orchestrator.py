@@ -512,9 +512,10 @@ def ingest_documents() -> str:
     """Wrapper used by the agent's ingest_documents_tool.
 
     Approach:
-        Runs the ingestion pipeline and returns a summary string the agent can
-        read. Embedding and storage are Phase-3 stubs, so nothing is written to
-        the vector store yet.
+        Runs the full ingest pipeline (parse, QC, chunk, embed, store) and
+        returns a summary string the agent can read. Includes the skipped
+        count so the agent can distinguish "already in the knowledge base"
+        from "newly added" and from "failed".
 
     Returns:
         str: Summary string for the agent.
@@ -522,15 +523,24 @@ def ingest_documents() -> str:
     report = ingest_corpus()
     n_total = len(report.results)
     n_success = len(report.successes)
+    n_skipped = len(report.skipped)
     n_failed = len(report.failures)
-    total_chunks = sum(r.n_chunks for r in report.successes)
-    return (
-        f"Pipeline processed {n_total} document(s). "
-        f"Parse+QC+chunk successful: {n_success} ({total_chunks} chunks produced). "
-        f"Quarantined: {n_failed}. "
-        f"Note: embedding and storage are Phase-3 stubs, "
-        f"so no new chunks were added to the knowledge base."
-    )
+    new_chunks = sum(r.n_chunks for r in report.successes)
+    parts = [f"Pipeline processed {n_total} document(s)."]
+    if n_success:
+        parts.append(
+            f"Newly ingested: {n_success} document(s) "
+            f"adding {new_chunks} chunks to the knowledge base."
+        )
+    if n_skipped:
+        parts.append(
+            f"Skipped: {n_skipped} document(s) already ingested under the current config."
+        )
+    if n_failed:
+        parts.append(f"Quarantined: {n_failed} document(s) (see problem_documents/).")
+    if not n_success and not n_failed:
+        parts.append("No new documents needed ingesting.")
+    return " ".join(parts)
 
 
 # ##############################################################################
