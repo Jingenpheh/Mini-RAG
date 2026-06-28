@@ -12,6 +12,12 @@ resolve against PROJECT_ROOT; absolute env var overrides pass through.
 import os
 from pathlib import Path
 
+# Silence the huggingface_hub symlink warning on Windows. The warning fires
+# every time a model file is added to the HF cache without a symlink fallback
+# being needed (e.g., once Developer Mode is enabled on Windows). It's noise,
+# not a real problem. setdefault so an explicit user override still wins.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 

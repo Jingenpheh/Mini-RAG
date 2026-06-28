@@ -6,6 +6,7 @@
 #
 # Contents:
 #   Functions:
+#     _get_converter()         - Lazy-init module-level Docling converter
 #     parse_document()         - Parse a PDF via Docling (routing point reserved)
 #     quality_check()          - Inspect parsed text for bad extraction
 # ##############################################################################
@@ -36,6 +37,22 @@ from config import (
 # ##############################################################################
 
 
+# Module-level singleton. Building DocumentConverter loads the layout model
+# (~770 weights) and RapidOCR's three sub-models (det, cls, rec) which together
+# take ~5-6 sec. Constructing one per call meant re-paying that cost on every
+# PDF; lifting it to module scope means we pay it once per process.
+_CONVERTER = None
+
+
+def _get_converter():
+    """Return the module-level DocumentConverter, building it on first call."""
+    global _CONVERTER
+    if _CONVERTER is None:
+        from docling.document_converter import DocumentConverter
+        _CONVERTER = DocumentConverter()
+    return _CONVERTER
+
+
 def parse_document(path: Path):
     """Parse a single document into a DoclingDocument.
 
@@ -57,9 +74,7 @@ def parse_document(path: Path):
     Returns:
         DoclingDocument: The parsed document with structural metadata intact.
     """
-    from docling.document_converter import DocumentConverter
-
-    converter = DocumentConverter()
+    converter = _get_converter()
     result = converter.convert(str(path))
     return result.document
 

@@ -628,6 +628,25 @@ It isn't part of the MCP server itself because the MCP server has a different co
 
 ---
 
+## GPU acceleration: considered, deferred
+
+SPECTER2 embedding is the bottleneck of the ingest pipeline. On a 7400-chunk corpus, embedding takes 15-20 min on CPU and would drop to 1-2 min on a consumer NVIDIA GPU. The same speedup applies to Docling's layout model if it gets pointed at the GPU too. Overall ingest could go from ~30 min to ~5 min. Real win on paper.
+
+The runtime side is trivial: one line in the embedding code to read `os.environ.get("DEVICE")` and pass it to `SentenceTransformer(model, device=device)`. sentence-transformers auto-detects if you don't specify, so a CUDA-enabled torch install just works.
+
+The install side is where it falls apart. PyTorch's CUDA wheels don't live on PyPI; they live on `download.pytorch.org/whl/cu124` (and `cu121`, `cu118`, etc.). The wheel has to match the user's CUDA driver version. There's no way to do this cleanly inside `pyproject.toml` without either:
+
+- forcing every user to know their CUDA version and pick a uv dependency group (`uv sync --group gpu` plus a `[tool.uv.sources]` block pinning torch to the right pytorch.org index), or
+- writing a custom install script that runs `nvidia-smi`, parses the driver version, picks the right wheel, and pip-installs it.
+
+I considered the install-script path. It's 50-80 lines of subprocess plumbing with a long tail of edge cases (`nvidia-smi` not on PATH on Windows, WSL2 reporting differently, multiple GPUs, AMD ROCm, Apple MPS, and the case where torch reports installed but a DLL load error means it actually doesn't work). The script handles the simple cases and bails on everything else, which means the user who actually has a problem still has to debug manually. The 50 lines don't buy them much.
+
+A custom install script also reads wrong for a portfolio repo. Auto-install scripts are conventional for full end-user applications (ComfyUI, oobabooga, AUTOMATIC1111). They're not conventional for libraries. A reviewer expecting `uv sync` would side-eye a project that runs subprocess + downloads wheels on first install.
+
+So GPU support stays out of the default install path. The CPU baseline runs anywhere a reviewer might clone it. Anyone with a GPU who wants the speedup pays the standard ML-ecosystem cost: install a CUDA-enabled torch themselves the way they already know how. If I ever scale the corpus past a few hundred papers, this calculation flips and the dependency-group path becomes worth wiring up. Not at 50 papers.
+
+---
+
 ## Future Improvements
 
 **Table-aware chunking and reranking.** v5 left `table_numerical` at 0.000. The MS-MARCO MiniLM cross-encoder doesn't score table-row chunks well, and the current chunker splits tables into per-row pieces via Docling's structured output. Two threads to pull on: keep each table as one chunk (caption plus rows joined, conflicts with the size ceiling so needs a separate code path), or swap in a reranker trained on tabular content.
