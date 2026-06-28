@@ -1,80 +1,166 @@
-# Mini-RAG: AMD Knowledge Assistant
+# Mini-RAG
 
-A minimal RAG (Retrieval-Augmented Generation) agent built with LangChain, OpenAI, and ChromaDB. The agent answers questions about AMD using a knowledge base of AMD blog posts, with tool-calling capabilities for document ingestion, retrieval, and knowledge base management.
+A research-paper retrieval system for arXiv ML/AI papers, exposed as an MCP server so external agents can use it as a tool.
+
+The system runs a five-stage retrieval pipeline (parse → chunk → embed → hybrid retrieve → cross-encoder rerank) over a corpus of arXiv ML/AI papers and answers natural-language questions about them. It was built as a portfolio piece exploring what production-grade RAG actually requires: iterated against an eval set, measured at every change, and exposed via MCP for consumption by agents.
+
+## Headline numbers
+
+On a hand-crafted 30-question golden eval set drawn from the corpus:
+
+| Metric | v1 baseline | v5 (current) | Lift |
+|---|---|---|---|
+| Recall@5 | 0.103 | 0.517 | 5.0x |
+| MRR | 0.059 | 0.378 | 6.4x |
+| Faithfulness (LLM-judged) | 0.634 | 0.826 | +0.192 |
+| Context recall (LLM-judged) | 0.169 | 0.608 | 3.6x |
+| Answer correctness | 0.267 | 0.474 | 1.8x |
+
+The full v1 → v1.1 → v2 → v3 → v4 → v5 journey, including which fix targeted which failure mode, is in [tests/eval/analysis/baseline_analysis.md](tests/eval/analysis/baseline_analysis.md).
 
 ## Stack
 
-- **LLM:** GPT-4o-mini via OpenAI API
-- **Framework:** LangChain (tool-calling agent with ReAct pattern)
-- **Vector Store:** ChromaDB (local, persisted to disk)
-- **Embeddings:** OpenAI text-embedding-3-small
-- **PDF Parsing:** PyPDFLoader
+- **Embeddings**: SPECTER2 (Allen AI, 768-dim, paper-specialized, runs locally)
+- **Vector store**: Chroma (local SQLite)
+- **Parsing**: Docling (layout-aware PDF parsing with table + formula extraction)
+- **Retrieval**: hybrid (BM25 + dense via Reciprocal Rank Fusion) + cross-encoder reranking
+- **Chunking**: docling doc-item granularity with contextual prefix (paper title + section) prepended
+- **Evaluation**: custom retrieval metrics (Recall@k, MRR, NDCG) + RAGAS (faithfulness, context precision/recall, answer correctness/relevancy)
+- **Generation (LLM)**: gpt-4o-mini via OpenAI API (used only by the dev agent and eval-time generation simulator)
+- **External interface**: Model Context Protocol (MCP) server
 
-## Project Structure
+## Project structure
 
 ```
-├── config.py            # Configuration constants (model, chunk size, paths)
-├── agent.py             # Agent setup, system prompt, LLM wiring
-├── main.py              # Entry point — chat loop
-├── tools/
-│   ├── __init__.py      # LangChain tool definitions
-│   ├── utils.py         # Shared utilities (vector store connection)
-│   ├── ingest.py        # PDF ingestion pipeline (load → clean → chunk → embed → store)
-│   └── retriever.py     # Knowledge base search and source listing
-├── tests/
-│   ├── test_ingest.py   # Ingestion smoke test
-│   └── test_retriever.py# Retrieval smoke test
-├── docs/                # PDF corpus (AMD blog posts)
-└── DEVLOG.md            # Development log — decisions, issues, and design rationale
+Mini-RAG/
+├── README.md                       ← this file
+├── DEVLOG.md                       ← decision narrative across the project
+├── CLAUDE.md                       ← session briefing for AI assistants
+├── config.py                       ← single source of truth for all config
+├── pyproject.toml                  ← project deps
+│
+├── mini_rag/                       ← library code (the package)
+│   ├── retriever.py                ← hybrid retrieval + cross-encoder rerank
+│   ├── utils.py                    ← shared singletons (embedder, vector store, BM25)
+│   ├── mcp_server.py               ← MCP server (production interface)
+│   ├── check_setup.py              ← deployment verification utility
+│   └── ingest/                     ← ingestion pipeline subpackage
+│
+├── scripts/                        ← CLI utilities (dev-time, not library code)
+│   ├── dev_agent.py                ← interactive LangChain dev agent
+│   └── sourcing/                   ← arXiv paper fetcher
+│       └── fetch_papers.py
+│
+└── tests/
+    └── eval/                       ← evaluation framework
+        ├── run_eval.py             ← eval runner (deterministic + RAGAS metrics)
+        ├── golden_set.jsonl        ← 30 hand-crafted Q/A pairs
+        ├── analysis/               ← version-by-version writeups
+        └── README.md
 ```
 
-## Agent Tools
+The `mini_rag/` package is the library. The MCP server in `mini_rag/mcp_server.py` is the production interface. `scripts/dev_agent.py` is a LangChain-based interactive REPL for local testing.
 
-| Tool | Description |
-|------|-------------|
-| `search_knowledge_tool` | Searches the vector store for relevant chunks (top-k=4) |
-| `ingest_documents_tool` | Scans `docs/` for new PDFs, chunks and embeds them into ChromaDB |
-| `list_sources_tool` | Lists all ingested documents with chunk counts |
-
-## Setup
+## Quick reproduce on a fresh clone
 
 ```bash
-# Create virtual environment (Python 3.12 recommended)
-uv venv --python 3.12
-source .venv/Scripts/activate  # Windows/Git Bash
+# 1) Install dependencies
+uv sync
 
-# Install dependencies
-uv pip install -r requirements.txt
+# 2) Optionally fetch the exact 50-paper eval corpus
+uv run --group sourcing python scripts/sourcing/fetch_papers.py --eval-corpus
 
-# Set up API key
+# 3) Set up your OpenAI API key
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# edit .env and add OPENAI_API_KEY
+
+# 4) Verify the setup
+python -m mini_rag.check_setup
+
+# 5) Ingest the corpus (~30 min on CPU; SPECTER2 embedding is the bottleneck)
+python -m mini_rag.ingest --debug
+
+# 6) Run the eval to reproduce the v5 numbers
+python -m tests.eval.run_eval
 ```
 
-## Usage
+After step 5 you'll have ~7,400 chunks indexed in `chroma_db/`. After step 6 you'll see overall + per-type metrics matching the headline table above.
+
+## Run as MCP server
+
+The production interface is MCP. To wire Mini-RAG into Claude Desktop:
+
+```jsonc
+// ~/.config/claude/claude_desktop_config.json (Mac/Linux)
+// %APPDATA%/Claude/claude_desktop_config.json (Windows)
+{
+  "mcpServers": {
+    "mini-rag": {
+      "command": "python",
+      "args": ["-m", "mini_rag.mcp_server"],
+      "env": {
+        "OPENAI_API_KEY": "sk-...",
+        "INGEST_CORPUS_DIR": "/absolute/path/to/papers"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop and Mini-RAG's four tools and five resources will be available.
+
+### MCP tools exposed
+
+| Tool | Purpose |
+|---|---|
+| `search_knowledge(query, k)` | Hybrid + reranked retrieval. Returns top-k chunks with arxiv_id, title, section, text. |
+| `list_corpus()` | Inventory of ingested papers with chunk counts. |
+| `ingest_new_documents()` | Scan corpus directory for new PDFs and process them. |
+| `ingest_from_arxiv(arxiv_id)` | Download a paper from arXiv by ID and ingest it. |
+
+### MCP resources exposed
+
+| Resource URI | Content |
+|---|---|
+| `eval://golden_set` | The 30-question golden eval set as JSONL |
+| `eval://latest_results` | Latest eval run record (last line of results.jsonl) |
+| `eval://baseline_analysis` | The v1→v5 cumulative journey analysis markdown |
+| `eval://v4_per_question_diagnosis` | Per-question diagnosis at v4 |
+| `corpus://manifest` | Inventory of ingested papers as JSON |
+
+## Run as local dev agent
+
+For interactive testing without MCP:
 
 ```bash
-python main.py
+python -m scripts.dev_agent
 ```
 
-```
-AMD Knowledge Assistant (type 'quit' to exit)
-==================================================
+This launches a LangChain ReAct agent with the same retrieval tools as the MCP server. Useful for sanity-checking changes locally.
 
-You: What is AMD's AI strategy?
-Assistant: According to the "Transforming AMD with AI" blog (page 1), AMD's internal
-adoption of AI is a strategic transformation...
+## Configuration
 
-You: What documents do you have?
-Assistant: Knowledge base: 5 document(s), 78 chunks total...
-```
+All configurable values live in `config.py` and most support environment-variable override. Common overrides:
 
-## Development Log
+| Env var | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | — | Required for the LLM (eval-time generation) |
+| `INGEST_CORPUS_DIR` | `./docs` | Where PDFs are read from. Point at an existing collection. |
+| `CHROMA_DIR` | `./chroma_db` | Where Chroma stores its data |
+| `TOP_K` | `5` | Top-k results returned by `retrieve()` |
+| `RERANK_TOP` | `50` | Cross-encoder rerank pool size |
+| `EMBEDDING_MODEL` | `allenai/specter2_base` | sentence-transformers model name |
 
-[DEVLOG.md](DEVLOG.md) documents the decisions, issues, and thought process behind building this project — from chunking strategy and document parsing challenges to system prompt iteration and ideas for future improvements. It covers:
+For runtime tuning you set these env vars; for permanent project changes you edit `config.py`.
 
-- Architecture decisions and project structure rationale
-- RAG system design: chunking methods evaluated, corrective RAG considerations, document parsing issues encountered
-- Agent design: ReAct pattern, MCP considerations, how LangChain wires tools to the LLM
-- System prompt iteration (3 versions: too loose → too strict → balanced)
-- Future directions: semantic chunking, document preprocessing agent, re-ranking, evaluation framework
+## Where to look next
+
+- [DEVLOG.md](DEVLOG.md): decision narrative across the whole project (architecture choices, why each fix was tried, what the eval said about each change).
+- [tests/eval/analysis/baseline_analysis.md](tests/eval/analysis/baseline_analysis.md): cumulative v1→v5 evaluation journey with deltas per version.
+- [tests/eval/analysis/v4_per_question_diagnosis.md](tests/eval/analysis/v4_per_question_diagnosis.md): per-question status as of v4 (pre-rerank-widening).
+- [tests/eval/README.md](tests/eval/README.md): how the eval set is structured and how to reproduce.
+- [CLAUDE.md](CLAUDE.md): session briefing for AI assistants working on this repo.
+
+## License
+
+Personal project, no formal license. The arXiv papers in `docs/` are subject to their own arXiv licenses.

@@ -348,14 +348,298 @@ Manual chore or wired to a pre-commit hook later.
 
 ---
 
+## Retrieval Design
+
+The first version of retrieval used Chroma's `similarity_search` directly: embed the query with the same model used at ingestion (SPECTER2), take top-k by cosine similarity, return the Documents. Pure dense, no fusion, no reranking. That's the baseline this section iterates on.
+
+### Why hybrid retrieval
+
+The eval baseline (see the Evaluation section below) showed pure dense at Recall@5 = 0.103. The per-type breakdown was the diagnostic: definition and contribution_recall worked, but specific_fact_lookup, methodology, equation, and table_numerical all bottomed out near zero.
+
+The pattern across the failures was the same. SPECTER2 was trained for paper-to-paper similarity. It maps "what dataset is introduced by SARLO-80" into a fuzzy cloud of dataset-related content across the entire corpus. The chunk that actually answers the question contains the specific terms ("Umbra Collection", "SICD scenes", "2,565") but doesn't repeat the paper's own name. The embedding can't bridge the gap from the question's anchor ("SARLO-80") to the answer chunk's content terms.
+
+Reading around how production RAG systems handle this, the standard fix is hybrid retrieval: run a keyword retriever in parallel with the dense one and fuse their rankings. The keyword retriever (BM25) does what dense can't do: exact-term matching on acronyms, numbers, proper nouns, technical jargon. Dense does what BM25 can't: semantic paraphrase, conceptual matching, synonyms. Combined via Reciprocal Rank Fusion, each catches what the other misses.
+
+### BM25 + dense via RRF
+
+BM25 (Best Match 25) is the standard probabilistic keyword retrieval function from the 1990s. The "25" is just the experimental iteration number from Robertson and Spärck Jones's series at City University London; nothing significant. The math weighs term frequency in a document, inverse document frequency across the corpus, and document length normalization. Practically: documents containing the query's rare terms score high, documents that just have generic words don't.
+
+For fusion, RRF was the right call over weighted score combination. Each retriever produces a ranked list. For each chunk that appears in either list, the RRF score is `sum of 1/(K + rank)` across both lists, with K = 60 as the standard constant. Chunks ranked at the top of both lists score highest, but chunks ranked top in only one still get a score and compete for the final top-k. The fusion doesn't try to compare BM25's term-overlap scores against dense's cosine scores directly; it just compares ranks, which is robust across very different scoring scales.
+
+### Implementation: in-memory, no separate index database
+
+The BM25 "index" is just tokenized text + term-frequency statistics. For 7,631 chunks it's roughly 50 MB of RAM and rebuilds in about a second from chunks already in Chroma. I considered three options:
+
+- **External index (ElasticSearch, OpenSearch, Postgres tsvector)**: heavy infrastructure for the scale, no benefit.
+- **Pickled on disk between runs**: small startup speedup (~1 second saved) at the cost of cache-invalidation complexity. Not worth it.
+- **In-memory, rebuild at process startup, lazy singleton**: simplest, matches the existing pattern for the SPECTER2 embedder singleton.
+
+I went with the in-memory singleton. The BM25 index lives in `tools/retriever.py` next to the `retrieve()` function that uses it. I deliberately did not put it in `tools/utils.py` even though that file holds the embedder and vector-store singletons. The rule for `utils.py` is "things both ingestion and retrieval need to share"; BM25 is only used at query time, so it belongs in the retrieval module.
+
+The `retrieve()` function is the single entry point. Both `search_knowledge()` (the agent tool) and the eval script call it. Hybrid behavior gets inherited by every retrieval surface automatically.
+
+### What hybrid still can't do
+
+The eval surfaced three categories where hybrid retrieval moved the needle from zero to zero. These aren't BM25 or dense failures; they're properties of single-pass retrieval that no amount of retriever tuning can fix:
+
+- **Multi-hop questions** ("Which related-work item discusses lottery, and what does it say"): require finding A, then formulating a follow-up query about A, then returning B. Single-pass retrieval has no decomposition step.
+- **Cross-paper questions** ("How do JanusMesh and Thinking in Boxes differ"): require fetching content from two distant papers and synthesizing. A single embedding cannot equally serve two unrelated topics.
+- **Vague-ambiguous questions** ("Tell me about image editing"): the query has no anchor for the system to grip onto. A real consumer would ask for clarification; raw retrieval has no clarification mechanism.
+
+These belong in the agent layer that consumes this RAG, not in the RAG itself. Their zero scores in the eval are evidence of where the boundary lies, not failures to fix.
+
+### What's left at the retrieval layer
+
+Cross-encoder reranking is the obvious v3 candidate. Hybrid retrieval got us into the right region but not always to the right chunk: for `table_numerical` questions, retrieval pulls the table caption and surrounding analysis but misses the specific row chunk holding the exact number. A reranker rescores the top-20 RRF results with a model trained for query-passage relevance directly, pushing the precise chunk above the noisy adjacent ones. The fix for `table_numerical` Recall@5 = 0 lives here.
+
+Table-specific chunking is the other thread. The current chunker splits tables into row-level chunks via Docling's structured output, which works for big tables and breaks for queries about specific rows. Keeping each table as one chunk (caption + all rows joined) is a defensible alternative; I haven't implemented it because it conflicts with the size ceiling on the rest of the chunker.
+
+Both belong on the v3 roadmap. Sequencing depends on which gap the next iteration prioritizes.
+
+---
+
+## Evaluation
+
+The eval set is the highest-leverage thing in the project. Without it, every change after this point reads as opinion. With it, every change has a number attached. This section captures what I built, what I learned about question design, and what the v1 → v1.1 → v2 numbers actually say.
+
+### Why evaluate at all (and why before the MCP wrapper)
+
+CLAUDE.md's re-scoped priorities put the eval set second, just after the validation experiment. The reasoning held up: I learned more from running the v1 baseline than from any single architectural decision in this project so far. The baseline numbers told me exactly which categories the system handled and which it failed on, which directly drove the v1.1 chunker fix and the v2 hybrid retrieval upgrade. Without those numbers, I would have been guessing about which improvement to pursue first.
+
+The other reason I did this before MCP is that the eval defines what "the RAG" is. The eval set is the contract: these are the questions the system is supposed to answer well. Once that's stable, the MCP tool surface that exposes the RAG to external agents has a measurable definition behind it. Building MCP first and then evaluating would be backwards.
+
+### Two layers of metrics
+
+I went with both custom retrieval metrics and RAGAS. The split:
+
+- **Custom (Recall@1, Recall@3, Recall@5, MRR, NDCG@5)**: deterministic, no LLM cost, computed from chunk_id matching against the golden set. Tells me whether the right chunk was retrieved. Pure retrieval signal.
+- **RAGAS (faithfulness, context_precision, context_recall, answer_correctness, answer_relevancy)**: LLM-judged on top of a minimal generation step. Tells me whether the retrieved chunks were USEFUL beyond the chunk_id strict-match.
+
+The reason for both: context_precision in particular saved me from misreading the methodology results. The v1 baseline showed methodology Recall@5 = 0 but context_precision = 0.904. That gap meant the retriever was finding RELEVANT content from the right paper, just not the specific chunk I had marked as gold. The chunk_id strict-match metric was overly punishing; the LLM-judge metric saw through to "this is methodology content from the right paper". Without RAGAS I would have over-corrected by widening the gold_chunk_ids; with RAGAS I could leave them and let context_precision carry that signal.
+
+For the eval-time generation step that RAGAS needs an answer for, I deliberately keep the LLM call minimal. No agent loop, no tool use, no fancy prompting. Just "given these chunks, answer this question". That's a floor on what any reasonable consumer of the RAG could do. If the minimal generator can produce a faithful, correct answer, anything more sophisticated will at least match it.
+
+### Question typology
+
+I built the golden set around a typology of question categories rather than just picking 30 questions ad-hoc. Each category tests a different property of the system. The 11 types I ended up using:
+
+- **specific_fact_lookup** (6 questions): a precise fact appearing in a single chunk. Tests dense embedding precision plus exact-term match.
+- **definition** (4): "what is X" where X is a paper-specific term. Tests whether the semantic embedding maps the term to its definition chunk.
+- **methodology** (4): "how did they do Y". Tests section-level retrieval of the methods section.
+- **table_numerical** (3): a specific value from a table. Tests how tables come through chunking and whether the value is retrievable.
+- **equation** (2): a specific formula. Tests whether equations land in chunks at all (they did not until the chunker fix), and whether dense retrieval can find math content.
+- **comparison_contrast** (3): two things compared within one paper. Tests multi-section synthesis.
+- **contribution_recall** (3): "what are the contributions". Tests list-item retrieval.
+- **cross_paper** (2): compare two different papers. Tests multi-document retrieval. Predicted to fail at the RAG layer.
+- **negative_no_answer** (1): a question the paper doesn't answer. Tests grounding: does the system refuse to hallucinate?
+- **vague_ambiguous** (1): "tell me about X" with no anchor. Tests query-understanding boundary. Predicted to fail at the RAG layer.
+- **multi_hop** (1): "find the thing about X and tell me what it says". Tests decomposition. Predicted to fail at the RAG layer.
+
+Three of the categories (cross_paper, multi_hop, vague_ambiguous) I included DELIBERATELY KNOWING they would score zero at the RAG layer. Their value is documenting where the agent-layer boundary lies. When the eval shows them at zero across v1, v1.1, and v2, that's evidence I can point at in the writeup: these aren't RAG failures, they're scope decisions.
+
+### What I got wrong about question crafting
+
+The first draft of the golden set had questions like "What dataset did this paper use?" and "What evaluation metrics did the team use in this paper?". I had written them while looking at specific papers, and the paper context was implicit in my head. When the eval ran, Recall@5 came back near zero across these questions even though the answers were trivially in the corpus.
+
+The reason was that the retriever has no implicit paper context. "This paper" is meaningless to a system processing a standalone query. SPECTER2 mapped "What dataset did this paper use" to a fuzzy cloud of dataset-related content across all 50 papers; it picked chunks discussing the COMPAS dataset, public dataset comparisons, and licensing tables from totally unrelated papers, all of which contained the word "dataset" but none of which were the gold paper.
+
+The lesson: a question that doesn't disambiguate itself can't be answered by retrieval alone, no matter how good retrieval is. In real consumer use, the question carries context: the user typed it because they were reading the paper, and the surrounding context provides the disambiguation. In standalone eval, the question has to carry the disambiguation itself.
+
+I rewrote 14 of the 30 questions to include the paper's distinctive name or technical anchor:
+
+- "What dataset did this paper use?" → "What dataset is introduced by SARLO-80?"
+- "What evaluation metrics did the team use in this paper?" → "What evaluation metrics does CalTennis use for monocular-to-3D tennis pose estimation?"
+- "What is the third takeaway of the experiment in this paper?" → "In the Calibrated Mixture-of-Experts under Distribution Shift paper, what is the third takeaway from the experiments?"
+
+The anchor doesn't have to be the full paper title. The most effective rewrites used the paper's distinctive proper noun: a system name (SARLO-80, CalTennis, MAA, ACE, JanusMesh), a method name, or a technical phrase that appears in the chunk content. arxiv_ids don't help because the ID isn't in the chunk text; SPECTER2 never sees the digit string in a context that would help it match.
+
+### What the v1, v1.1, v2 numbers said
+
+I tracked three versions, each isolating one change:
+
+- **v1**: pure dense retrieval, current chunker. Baseline.
+- **v1.1**: chunker fix (Docling `FormulaItem.orig` fallback). Recovers formula content that v1 silently dropped.
+- **v2**: hybrid retrieval (BM25 + dense via RRF).
+
+The progression of overall Recall@5: 0.103 → 0.103 → 0.276. v1.1 didn't move retrieval rank metrics because the formula CONTENT landing in chunks doesn't help if the chunks aren't being ranked higher. But v1.1 did move RAGAS context_recall up by +0.034 because the retrieved chunks now contained more of the gold answer text. The fix was necessary scaffolding; v2 unlocked its value.
+
+v2 (hybrid) is where the numbers actually moved. Recall@5 nearly tripled, every RAGAS metric jumped, and the equation type went from 0.000 to 0.500 (the combined v1.1 + v2 win). Categories that needed the agent layer (cross_paper, multi_hop, vague_ambiguous) stayed at zero across all three versions, as predicted.
+
+The full per-version comparison lives at `tests/eval/analysis/baseline_analysis.md`. The structure is: headline numbers, per-type breakdown, findings, per-question highlights, run metadata. Three sections, one per version, so a reader can see the deltas at a glance.
+
+### Reproducibility: the corpus lock file
+
+The eval is only useful if someone else can run it. The arxiv papers in `docs/` are gitignored (250 MB), the manifest is gitignored too (per-developer dedup state), and the original `fetch_papers.py` pulls papers by category + date, which is non-deterministic by design.
+
+The fix is a small JSON lock file at `scripts/sourcing/eval_corpus.json` listing the exact 50 arxiv_ids the eval set is built against. A new function `fetch_eval_corpus()` in `fetch_papers.py` queries arxiv by exact id_list (deterministic) and downloads those papers. A fresh clone can reproduce the eval environment with one command. The repo stays small (no PDFs), and the eval still has the realistic 50-paper distractor corpus that makes retrieval testing meaningful.
+
+### What I'd add to the eval set later
+
+Categories worth adding once the system can handle them:
+
+- **Cross-section synthesis within a single paper**: queries that explicitly require combining content from the methods and results sections. Tests reranking and parent-doc expansion together.
+- **Negative-cross-paper**: "Does paper X discuss Y" where X exists but Y is not in X. Tests grounding across the multi-doc surface.
+- **Date-sensitive**: "What is the most recent paper in the corpus that mentions Z". Tests metadata filtering.
+- **Adversarial paraphrase**: same factual question asked with completely different vocabulary. Tests embedding robustness directly.
+
+I haven't added these yet because each requires either an agent layer (cross-section), a multi-doc retrieval pattern (negative-cross-paper), or features I haven't built (metadata range queries). They're queued for after the next architectural step.
+
+---
+
+## Cross-encoder Reranking (v3)
+
+v2's hybrid retrieval got Recall@5 from 0.103 to 0.276. The per-question audit (`tests/eval/analysis/v2_per_question_diagnosis.md`) showed two distinct failure modes left:
+
+1. The right chunk was in the top-20 but ranked between 6 and 20. Reranking would solve this.
+2. The right chunk was past rank 100 in both BM25 and dense (Q01 SARLO-80 at rank 200+, Q07 MAA at rank 1868). No reranker can recover what was never retrieved.
+
+I added a cross-encoder reranking stage to fix category 1. The flow becomes: dense top-20 plus BM25 top-20 fused by RRF, then the top-N of the fused pool rescored by a cross-encoder, then top-k returned to the caller.
+
+### Model choice
+
+`cross-encoder/ms-marco-MiniLM-L-6-v2` from sentence-transformers. 80 MB, MS-MARCO trained, runs on CPU in under a second per query for a pool of 50. It's the standard small cross-encoder; I chose it for the local-CPU constraint and the fact that MS-MARCO is the right training domain (text passage relevance). A SciFact-trained or table-specialized model would be the next thing to try, but at this corpus size the difference doesn't show up cleanly on the eval set.
+
+The reranker singleton lives in `mini_rag/retriever.py` rather than `mini_rag/utils.py`. `utils.py` holds resources shared between ingest and retrieve (embedder, vector store, BM25 corpus loader). The cross-encoder is only used at retrieve time, so it stays with the retriever.
+
+### What the v3 numbers said
+
+Overall Recall@5: 0.276 → 0.310. The lift was real but smaller than the v2 jump. The reranker recovered cases where the gold chunk was in the fused top-20 but ranked below noise. It didn't touch the deep failures (Q01, Q07 still at zero) because the chunks weren't in the candidate pool. That confirmed the diagnosis: the next fix had to be at the candidate-generation layer, not the rescoring layer.
+
+The reranker also held context_recall flat and lifted faithfulness slightly. It's doing what it should: changing which top-5 chunks the LLM sees, not what's in the pool.
+
+---
+
+## Contextual Chunking (v4)
+
+The v3 audit confirmed the rank-200+ failures came from a structural mismatch. Q01 asked about SARLO-80, the paper's named system. The chunk holding the answer didn't say "SARLO-80" anywhere; the paper introduced the name on page 1 and used "our system" thereafter. SPECTER2 embedded the chunk as generic methods text. BM25 had no token to match. Both retrievers missed.
+
+The fix: prepend a contextual prefix to every chunk before embedding and BM25 indexing. The prefix is `"Paper: <title>\nSection: <section>\n\n"` followed by the original chunk text. Every chunk now carries the paper's title and the section heading inside its searchable text.
+
+### Why inline prefix and not a separate field
+
+I considered putting the title and section in a separate metadata field and indexing it independently with weight. I went with inline prefix because:
+
+1. BM25 and dense retrieval both benefit without retriever-side changes. One prefix string, two retrievers fixed.
+2. The cross-encoder also sees the prefix at rerank time, so the title context flows into the rescoring decision too.
+3. It's reversible: drop the prefix in display by stripping the known format.
+
+The prefix lives in `chunk.text` directly. The chunk's metadata still carries `title` and `section_heading` as fields for filtering and citation rendering, but the searchable text is what the retrievers actually score against.
+
+### Numbers
+
+Overall Recall@5: 0.310 → 0.517. Per-type, the lifts went where I expected and one place I didn't:
+
+- contribution_recall: 0.333 → 1.000 (perfect). "What are the contributions of <paper>" now matches because the title is in every chunk of that paper.
+- cross_paper: 0.000 → 1.000 (perfect). Surprise. The chunks now disambiguate which paper they came from at the embedding layer, so cross-paper queries that name both papers retrieve from both. I had predicted this category would need an agent layer; for the two specific cross-paper questions in the eval set, the embedding gain was enough.
+- methodology: 0.000 → 0.500. Section heading prefix helps "how did they do X" find the methods section.
+- table_numerical: 0.000 → 0.000. The cross-encoder still doesn't rerank table-format chunks well (model fit, not pool depth). The fix here is a different reranker or table-aware chunking, neither of which the prefix touches.
+- multi_hop / vague_ambiguous: 0.000. Still agent-layer problems, as expected.
+
+I bumped CHUNKER_VERSION from 2 to 3. The change invalidates `config_hash`, which forces the ingest pipeline to re-process the whole corpus under the new chunking. Without the bump the dedup check would have skipped re-ingest and v4 would have run against v3 chunks.
+
+---
+
+## Widened RERANK_TOP=50 (v5)
+
+v4 fixed the deep failures by getting the right chunks into the candidate pool. Next question: does a wider rerank pool help? The cross-encoder was rescoring the top-20 of the fused result. If gold chunks are landing at ranks 21 through 50 in the fused output, widening the pool would catch them.
+
+I widened RERANK_TOP from 20 to 50 and re-ran. Strict Recall@5 stayed at 0.517. Per-question diffs were small and went both ways. The change wasn't moving the rank-1 metric.
+
+But the LLM-judged metrics moved:
+
+- context_recall: +0.133
+- faithfulness: +0.037
+
+This is the latent-quality signal. The strict chunk_id match doesn't reward "the gold chunk wasn't returned but a different chunk with the answer text was". The LLM-judged metrics do. Widening the rerank pool was pulling in adjacent chunks containing the answer content without matching the gold chunk_id. The minimal generator answered more questions correctly with the wider pool's top-5.
+
+I kept RERANK_TOP=50. The cost is one cross-encoder pass on 50 instead of 20 candidates (about 25 ms more per query on CPU). The benefit is measurable on the metrics that reflect downstream answer quality.
+
+---
+
+## Structural cleanup
+
+Through v1 to v5 the repo accumulated leftovers from the AMD-demo origin. Before wrapping with MCP I cleaned the structure so the library boundary is clear.
+
+### tools/ to mini_rag/
+
+The library was at `tools/`. Generic name, not what the project is. I renamed via `git mv` to preserve history, then mass-updated 9 files' imports from `from tools.X` to `from mini_rag.X`. The library is now `mini_rag`, the dev CLI is in `scripts/`, the tests are in `tests/`. Standard layout.
+
+### Dev agent moved out of the library
+
+`agent.py` and `main.py` were at the project root. They wired the LangChain ReAct agent for local interactive testing. That's dev tooling, not library code. I consolidated them into `scripts/dev_agent.py`. The banner changed from "AMD Knowledge Assistant" to "Mini-RAG dev agent" and the system prompt was rewritten for research-paper context.
+
+The dev agent stays in the repo because it's still useful for sanity-checking changes without spinning up an MCP client. I considered deleting it; the MCP server is the production interface and would be enough on its own. I kept the dev agent because it exercises the LangChain side of the stack, which recruiters mention in JDs. Two interfaces, same retrieval underneath.
+
+### Config consolidation
+
+`scripts/sourcing/config.py` and root `config.py` were two separate config files for different parts of the pipeline. The sourcing config held arxiv categories and date ranges; the root config held everything else. I merged them: the sourcing constants moved into root `config.py` with a `SOURCING_*` prefix. `fetch_papers.py` now imports `SOURCING_CATEGORIES`, `SOURCING_MAX_RESULTS`, etc. from the consolidated root.
+
+Every config value also now supports an environment-variable override using the pattern `os.environ.get("VAR", default)`. This matters for MCP deployment: the consumer sets `INGEST_CORPUS_DIR` or `RERANK_TOP` in their MCP client config without forking the repo.
+
+### Smoke tests deleted
+
+`tests/test_ingest.py` and `tests/test_retriever.py` were initial smoke tests written before the eval framework existed. The eval runner at `tests/eval/run_eval.py` now exercises the full ingest-to-retrieve path across 30 questions with deterministic and LLM-judged metrics. The smoke tests were exercising the same code paths with less coverage. I deleted them.
+
+The instinct to keep "extra tests just in case" is wrong here. Tests have a maintenance cost and the eval framework already covers what they covered. The cleaner state is the right call.
+
+---
+
+## MCP wrapper
+
+The retrieval pipeline is now stable and the eval numbers are documented. Time to expose it.
+
+### Why MCP and not a Skill
+
+Anthropic's Claude has two extension mechanisms: MCP servers (external tools and resources) and Skills (workflow extensions baked into Claude). They occupy different layers:
+
+- MCP is the data and service layer. It exposes capabilities that need code execution: search a vector store, call an API, query a database. Available to any MCP-compatible client.
+- Skills are the workflow layer. They package a recipe for how to use existing capabilities. They run inside Claude.
+
+A RAG system is fundamentally a service. It owns code, indices, and a corpus. MCP fits. A skill that "uses Mini-RAG" would still need MCP underneath to actually retrieve anything. Both can coexist: someone could write a Skill that wraps the MCP tools with a domain-specific prompt, but the MCP server is the necessary substrate.
+
+I went with MCP. The skill layer can come later if the use case calls for it.
+
+### The tool surface
+
+Four tools, five resources. The split is deliberate:
+
+- Tools are actions: `search_knowledge(query, k)`, `list_corpus()`, `ingest_new_documents()`, `ingest_from_arxiv(arxiv_id)`. The first two are read-side; the last two are write-side.
+- Resources are read-only data: `eval://golden_set`, `eval://latest_results`, `eval://baseline_analysis`, `eval://v4_per_question_diagnosis`, `corpus://manifest`.
+
+I considered exposing the `eval://*` data as tools instead. Two reasons I kept them as resources: they don't take arguments, and they don't change state. MCP resources are the right primitive for "here's a chunk of data clients can read". Tools are the right primitive for "here's a thing clients call". Mixing them by exposing read-only data as zero-argument tools muddles the contract.
+
+`ingest_from_arxiv` exists because a consumer agent might want to add a paper on demand. The implementation downloads the PDF, updates the corpus manifest with metadata, and reuses the standard ingest pipeline. Idempotent: dedup on `arxiv_id + config_hash` skips already-ingested papers.
+
+### Deploy-time configuration only
+
+I considered exposing a `configure(...)` tool that lets the consumer change retrieval parameters at runtime. I dropped it. The consumer should set `RERANK_TOP`, `TOP_K`, `INGEST_CORPUS_DIR` in their MCP client config (env vars) and restart the server. Reasons:
+
+- Runtime config negotiation is a stateful concern. The server would have to track per-client state.
+- The config values are deployment knobs, not per-query knobs. Per-query knobs like `k` are already on `search_knowledge`.
+- It's harder to reproduce an eval run when the server's behavior depends on prior client interactions.
+
+The env-var override pattern from the config consolidation makes deploy-time tuning trivial without touching code.
+
+### check_setup
+
+I added `mini_rag/check_setup.py` as a separate utility. It runs through a checklist (API key, corpus dir, Chroma reachable, MCP server importable, vector store collection populated) and reports green or red per item. It's the answer to "I cloned this and it doesn't work". One command tells you what's missing.
+
+It isn't part of the MCP server itself because the MCP server has a different concern (be a server). The setup checker is for the human who just cloned the repo.
+
+---
+
 ## Future Improvements
 
-**Semantic chunking.** Use a local embedding model to find meaning boundaries instead of character boundaries, which avoids per-window API cost.
+**Table-aware chunking and reranking.** v5 left `table_numerical` at 0.000. The MS-MARCO MiniLM cross-encoder doesn't score table-row chunks well, and the current chunker splits tables into per-row pieces via Docling's structured output. Two threads to pull on: keep each table as one chunk (caption plus rows joined, conflicts with the size ceiling so needs a separate code path), or swap in a reranker trained on tabular content.
 
-**Document preprocessing agent.** An agent sitting before the embedding pipeline that inspects each document and routes it to the right parser (text extraction, OCR, or structural parsing), replacing the fixed pipeline.
+**Parent-document retrieval.** Index small chunks for embedding precision, return larger parent sections to the LLM for context. Should lift context_recall further. Schema is already forward-compatible (chunk metadata can carry parent IDs).
 
-**Re-ranking.** After initial retrieval, rescore results with a cross-encoder model to filter out chunks that are semantically close but topically off.
+**Agent-layer query decomposition for multi-hop and vague queries.** The eval surfaced these as outside the RAG's scope. They belong in the MCP-consuming agent layer that decomposes a complex question into sub-queries, calls `search_knowledge` for each, and synthesizes the results.
 
-**Query reformulation.** Generate multiple query variants per search using LangChain's `MultiQueryRetriever`, then merge and deduplicate results.
+**Document preprocessing agent.** An agent that inspects each incoming document and routes it to the right parser (Docling for digital PDFs, OCR for scanned, structured table parser, slide parser). Replaces the fixed `parse_document` with adaptive routing.
 
-**Evaluation framework.** Automated retrieval and answer evaluation using RAGAS or LangChain's eval tools. Key metrics are faithfulness (answer matches sources), relevance (chunks match query), and completeness (all aspects addressed). Agent tool usage patterns are also worth tracking, to check whether the agent is choosing the right tool for each situation.
+**Semantic chunking as a phase-later option.** Currently deferred because docling's structural chunks were good enough and semantic chunking adds embedding cost. Worth revisiting if the eval shows specific failure modes that paragraph-level chunking can't address.
+
+**Tracing and cost tracking.** Wire Langfuse or Phoenix for per-request tracing during retrieval and generation. Useful both for debugging and for quantifying the per-query cost as the system scales.
+
+**Local LLM swappable for generation.** Add a switchable backend so the generation step (and potentially the RAGAS judge calls) can run against a local model. Useful for the privacy-aware use case and lowers eval cost during iteration.
