@@ -9,7 +9,9 @@ care what the current working directory is. Relative env var overrides also
 resolve against PROJECT_ROOT; absolute env var overrides pass through.
 """
 
+import logging
 import os
+import warnings
 from pathlib import Path
 
 # Silence the huggingface_hub symlink warning on Windows. The warning fires
@@ -17,6 +19,20 @@ from pathlib import Path
 # being needed (e.g., once Developer Mode is enabled on Windows). It's noise,
 # not a real problem. setdefault so an explicit user override still wins.
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+# Dial down chatty third-party loggers during ingestion. Docling emits INFO
+# logs for every plugin scan and model setup; RapidOCR emits a WARNING on
+# every blank/figure-only page. huggingface_hub warns about anonymous
+# downloads on every model fetch. Real errors still come through at ERROR.
+logging.getLogger("docling").setLevel(logging.WARNING)
+logging.getLogger("rapidocr").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
+# Suppress Docling's "plugin langchain_docling will not be loaded" message and
+# huggingface_hub's anonymous-download warning, both of which come through the
+# warnings module rather than logging.
+warnings.filterwarnings("ignore", message=".*langchain_docling.*")
+warnings.filterwarnings("ignore", message=".*unauthenticated requests.*")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 

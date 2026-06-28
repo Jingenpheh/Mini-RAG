@@ -40,6 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+# Third-party
+from tqdm import tqdm
+
 # Local
 from config import (
     INGEST_CORPUS_DIR,
@@ -469,8 +472,11 @@ def ingest_corpus(
 
     report = Report(started_at=started_at)
 
-    # Process each document; orchestrator only orchestrates
-    for doc_path in docs:
+    # Process each document; orchestrator only orchestrates. Wrapped in tqdm
+    # so the caller (CLI or agent tool) sees an updating progress bar with
+    # ETA instead of a wall of log lines. Per-doc status is written via
+    # tqdm.write so it stacks cleanly above the bar.
+    for doc_path in tqdm(docs, desc="Ingesting", unit="doc"):
         arxiv_id = doc_path.stem
 
         # Dedup check: skip documents already ingested under current config.
@@ -478,7 +484,7 @@ def ingest_corpus(
         if already_ingested(arxiv_id, config_hash):
             result = Result.skipped(doc_path, f"already ingested under config {config_hash}")
             report.add(result)
-            print(f"  {result.status:9s} {doc_path.name}")
+            tqdm.write(f"  {result.status:9s} {doc_path.name}")
             continue
 
         try:
@@ -492,7 +498,7 @@ def ingest_corpus(
             handle_failure(doc_path, result.failures)
 
         # Per-document progress line
-        print(f"  {result.status:9s} {doc_path.name}")
+        tqdm.write(f"  {result.status:9s} {doc_path.name}")
 
     return report
 
