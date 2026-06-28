@@ -33,6 +33,7 @@
 
 # Standard library
 import json
+import ssl
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -44,12 +45,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Third-party
+import certifi  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 # Local
 from config import TOP_K, INGEST_CORPUS_DIR, INGEST_MANIFEST_PATH  # noqa: E402
 from mini_rag.retriever import retrieve, list_sources  # noqa: E402
 from mini_rag.ingest import ingest_documents  # noqa: E402
+
+
+# ##############################################################################
+# SSL trust store
+# ##############################################################################
+
+# urllib on Windows Python doesn't load a CA bundle by default, so the
+# arxiv PDF download in ingest_from_arxiv fails with CERTIFICATE_VERIFY_FAILED.
+# Point the default SSL context at certifi's bundle so urllib trusts the same
+# CAs that requests does. Process-wide patch; fine for a single-purpose server.
+ssl._create_default_https_context = lambda: ssl.create_default_context(
+    cafile=certifi.where()
+)
 
 
 # ##############################################################################

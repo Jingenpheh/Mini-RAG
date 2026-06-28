@@ -13,7 +13,6 @@
 #     EVAL_CORPUS_LOCK         - Path to scripts/sourcing/eval_corpus.json
 #
 #   Functions:
-#     _resolve()               - Resolve config path (relative or absolute)
 #     load_manifest()          - Read manifest of already-downloaded papers
 #     save_manifest()          - Persist manifest after updates
 #     build_query()            - Compose arXiv query string from config
@@ -26,6 +25,7 @@
 
 # Standard library
 import json
+import ssl
 import sys
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -33,6 +33,7 @@ from pathlib import Path
 
 # Third-party
 import arxiv
+import certifi
 
 # Local
 # SCRIPT_DIR must be defined and added to sys.path so we can find the project
@@ -47,8 +48,22 @@ from config import (  # noqa: E402
     SOURCING_MAX_RESULTS as MAX_RESULTS,
     SOURCING_DATE_DAYS as DATE_DAYS,
     SOURCING_KEYWORDS as KEYWORDS,
-    SOURCING_PAPERS_DIR as _PAPERS_DIR_CFG,
-    SOURCING_MANIFEST_PATH as _MANIFEST_PATH_CFG,
+    SOURCING_PAPERS_DIR,
+    SOURCING_MANIFEST_PATH,
+)
+
+
+# ##############################################################################
+# SSL trust store
+# ##############################################################################
+
+# urllib on Windows Python doesn't load a CA bundle by default, so HTTPS
+# certificate verification fails with CERTIFICATE_VERIFY_FAILED on arxiv PDF
+# downloads. Point the default SSL context at certifi's bundle so urllib
+# trusts the same CAs that requests does. Process-wide patch; fine for a CLI
+# script.
+ssl._create_default_https_context = lambda: ssl.create_default_context(
+    cafile=certifi.where()
 )
 
 
@@ -56,15 +71,9 @@ from config import (  # noqa: E402
 # Path resolution
 # ##############################################################################
 
-
-def _resolve(p: str) -> Path:
-    """Resolve a config path: absolute paths as-is, relative paths from SCRIPT_DIR."""
-    path = Path(p)
-    return path if path.is_absolute() else (SCRIPT_DIR / path).resolve()
-
-
-PAPERS_DIR = _resolve(_PAPERS_DIR_CFG)
-MANIFEST_PATH = _resolve(_MANIFEST_PATH_CFG)
+# Paths come from config.py already absolute (resolved against PROJECT_ROOT).
+PAPERS_DIR = Path(SOURCING_PAPERS_DIR)
+MANIFEST_PATH = Path(SOURCING_MANIFEST_PATH)
 EVAL_CORPUS_LOCK = SCRIPT_DIR / "eval_corpus.json"
 
 

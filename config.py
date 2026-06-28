@@ -3,9 +3,25 @@
 Single source of truth for all configurable values. Modules read from here.
 Most values support environment-variable override so deployments don't have
 to fork this file. Pattern: os.environ.get("VAR", default).
+
+Path constants are resolved against PROJECT_ROOT so consumers don't have to
+care what the current working directory is. Relative env var overrides also
+resolve against PROJECT_ROOT; absolute env var overrides pass through.
 """
 
 import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_path(env_var: str, default: str) -> str:
+    """Resolve a path config value: env var first, then absolute against PROJECT_ROOT."""
+    value = os.environ.get(env_var, default)
+    p = Path(value)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return str(p)
 
 
 # ##############################################################################
@@ -30,7 +46,7 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "allenai/specter2_base")
 # Chroma vector store
 # ##############################################################################
 
-CHROMA_DIR = os.environ.get("CHROMA_DIR", "./chroma_db")
+CHROMA_DIR = _resolve_path("CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.environ.get("COLLECTION_NAME", "research_papers")
 
 
@@ -66,15 +82,15 @@ CROSS_ENCODER_MODEL = os.environ.get(
 # Where the corpus lives. PDFs in this folder get ingested. Set
 # INGEST_CORPUS_DIR env var to point at any folder (e.g., a shared papers
 # directory outside the repo) without modifying this file.
-INGEST_CORPUS_DIR = os.environ.get("INGEST_CORPUS_DIR", "./docs")
+INGEST_CORPUS_DIR = _resolve_path("INGEST_CORPUS_DIR", "./docs")
 
 # Debug output root. Per-stage subfolders live underneath.
-INGEST_DEBUG_ROOT = os.environ.get("INGEST_DEBUG_ROOT", "./debug")
-INGEST_DEBUG_DIR = f"{INGEST_DEBUG_ROOT}/ingestion"
-INGEST_PROBLEM_DIR = f"{INGEST_DEBUG_DIR}/problem_documents"
+INGEST_DEBUG_ROOT = _resolve_path("INGEST_DEBUG_ROOT", "./debug")
+INGEST_DEBUG_DIR = str(Path(INGEST_DEBUG_ROOT) / "ingestion")
+INGEST_PROBLEM_DIR = str(Path(INGEST_DEBUG_DIR) / "problem_documents")
 
 # Manifest location (produced by scripts/sourcing/fetch_papers.py).
-INGEST_MANIFEST_PATH = os.environ.get(
+INGEST_MANIFEST_PATH = _resolve_path(
     "INGEST_MANIFEST_PATH", "./scripts/sourcing/manifest.json"
 )
 
@@ -157,9 +173,9 @@ SOURCING_KEYWORDS = []  # e.g. ["retrieval augmented generation"]
 
 # Where the sourcing script writes downloaded PDFs. Same as INGEST_CORPUS_DIR
 # by default so fetched papers land where ingestion will pick them up.
-SOURCING_PAPERS_DIR = os.environ.get("SOURCING_PAPERS_DIR", INGEST_CORPUS_DIR)
+SOURCING_PAPERS_DIR = _resolve_path("SOURCING_PAPERS_DIR", INGEST_CORPUS_DIR)
 
 # Sourcing-script dedup state. Co-located with the script as throwaway state.
-SOURCING_MANIFEST_PATH = os.environ.get(
+SOURCING_MANIFEST_PATH = _resolve_path(
     "SOURCING_MANIFEST_PATH", INGEST_MANIFEST_PATH
 )
