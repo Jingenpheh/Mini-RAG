@@ -20,11 +20,17 @@ from pathlib import Path
 # not a real problem. setdefault so an explicit user override still wins.
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-# Dial down chatty third-party loggers during ingestion. Docling emits INFO
-# logs for every plugin scan and model setup; RapidOCR emits a WARNING on
-# every blank/figure-only page. huggingface_hub warns about anonymous
-# downloads on every model fetch. Real errors still come through at ERROR.
+# Dial down chatty third-party loggers during ingestion.
+# - docling at WARNING keeps real warnings; the rapid_ocr_model child
+#   logger goes to ERROR to silence the per-page "RapidOCR returned empty
+#   result" message that fires on every blank/figure-only page
+# - "RapidOCR" (case-sensitive, capital R) is the actual name RapidOCR
+#   uses for its own logger; "rapidocr" is added as a defensive fallback
+# - huggingface_hub at ERROR silences the anonymous-download warning
+# Real errors still come through.
 logging.getLogger("docling").setLevel(logging.WARNING)
+logging.getLogger("docling.models.stages.ocr.rapid_ocr_model").setLevel(logging.ERROR)
+logging.getLogger("RapidOCR").setLevel(logging.ERROR)
 logging.getLogger("rapidocr").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
