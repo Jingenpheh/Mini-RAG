@@ -6,10 +6,21 @@ RAG against them. Drawn from the arXiv ML/AI corpus locked in
 
 ## Files
 
-- `golden_set.jsonl` - 30 hand-crafted Q/A entries, one record per line
-- `run_eval.py` - the eval runner: retrieval metrics + RAGAS scoring
-- `results.jsonl` - generated per run, one record per invocation (gitignored)
-- `README.md` - this file
+```
+tests/eval/
+├── README.md           - this file
+├── run_eval.py         - eval runner: retrieval metrics + RAGAS scoring
+├── golden_set.jsonl    - 30 hand-crafted Q/A entries, one record per line
+├── results.jsonl       - generated per run, one record per invocation (gitignored)
+└── analysis/           - per-version writeups and per-question diagnostics
+    ├── baseline_analysis.md          - cumulative v1 -> v1.1 -> v2 -> v3 -> v4 journey
+    ├── v2_retrieval_audit.md         - per-Q retrieval inspection at v2 baseline
+    ├── v2_per_question_diagnosis.md  - per-Q fix-category analysis at v2
+    ├── v4_retrieval_audit.md         - per-Q retrieval inspection at v4
+    └── v4_per_question_diagnosis.md  - per-Q status + remaining-fix analysis at v4
+```
+
+The outer `tests/eval/` layer is kept lean (script + data + reproducibility README). All version-by-version writeups live in `analysis/` so adding more diagnostic files doesn't clutter the runtime surface.
 
 ## Quick reproduce on a fresh clone
 
