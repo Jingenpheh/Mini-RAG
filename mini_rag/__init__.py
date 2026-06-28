@@ -1,6 +1,6 @@
 from langchain_core.tools import tool
-from tools.ingest import ingest_documents
-from tools.retriever import search_knowledge, list_sources
+from mini_rag.ingest import ingest_documents
+from mini_rag.retriever import search_knowledge, list_sources
 
 
 # --- LangChain tool wrappers ---

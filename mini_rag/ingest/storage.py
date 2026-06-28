@@ -10,8 +10,8 @@
 
 
 # Local
-from tools.utils import get_vector_store
-from tools.ingest.schema import Chunk
+from mini_rag.utils import get_vector_store
+from mini_rag.ingest.schema import Chunk
 
 
 # ##############################################################################

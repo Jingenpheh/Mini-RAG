@@ -49,8 +49,8 @@ from dotenv import load_dotenv
 
 # Local
 from config import LLM_MODEL, LLM_TEMPERATURE, TOP_K
-from tools.retriever import retrieve
-from tools.ingest.orchestrator import compute_pipeline_commit, compute_config_hash
+from mini_rag.retriever import retrieve
+from mini_rag.ingest.orchestrator import compute_pipeline_commit, compute_config_hash
 
 
 # ##############################################################################

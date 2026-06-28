@@ -50,11 +50,11 @@ from config import (
     INGEST_DEFAULT_DRY_RUN,
     INGEST_DEFAULT_DEBUG,
 )
-from tools.ingest.parsing import parse_document, quality_check
-from tools.ingest.pii import scrub_pii
-from tools.ingest.chunking import chunk_document
-from tools.ingest.embeddings import embed_chunks
-from tools.ingest.storage import store_chunks
+from mini_rag.ingest.parsing import parse_document, quality_check
+from mini_rag.ingest.pii import scrub_pii
+from mini_rag.ingest.chunking import chunk_document
+from mini_rag.ingest.embeddings import embed_chunks
+from mini_rag.ingest.storage import store_chunks
 
 
 # ##############################################################################
@@ -335,7 +335,7 @@ def already_ingested(arxiv_id: str, config_hash: str) -> bool:
     Returns:
         bool: True if already ingested under the current config, else False.
     """
-    from tools.utils import get_vector_store
+    from mini_rag.utils import get_vector_store
 
     try:
         store = get_vector_store()

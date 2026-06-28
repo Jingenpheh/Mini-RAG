@@ -35,18 +35,20 @@ from pathlib import Path
 import arxiv
 
 # Local
-# SCRIPT_DIR must be defined and added to sys.path before importing `config`,
-# since the script may be invoked from any working directory.
+# SCRIPT_DIR must be defined and added to sys.path so we can find the project
+# root's config.py regardless of where the script is invoked from. Sourcing
+# now reads from the consolidated root config.py instead of a local one.
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR))
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import (  # noqa: E402
-    CATEGORIES,
-    MAX_RESULTS,
-    DATE_DAYS,
-    KEYWORDS,
-    PAPERS_DIR as _PAPERS_DIR_CFG,
-    MANIFEST_PATH as _MANIFEST_PATH_CFG,
+    SOURCING_CATEGORIES as CATEGORIES,
+    SOURCING_MAX_RESULTS as MAX_RESULTS,
+    SOURCING_DATE_DAYS as DATE_DAYS,
+    SOURCING_KEYWORDS as KEYWORDS,
+    SOURCING_PAPERS_DIR as _PAPERS_DIR_CFG,
+    SOURCING_MANIFEST_PATH as _MANIFEST_PATH_CFG,
 )
 
 

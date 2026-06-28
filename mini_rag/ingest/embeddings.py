@@ -10,8 +10,8 @@
 
 
 # Local
-from tools.utils import get_embedder
-from tools.ingest.schema import Chunk
+from mini_rag.utils import get_embedder
+from mini_rag.ingest.schema import Chunk
 
 
 # ##############################################################################
@@ -26,7 +26,7 @@ def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
         chunks (list[Chunk]): Chunks to embed.
 
     Approach:
-        Calls the shared embedder singleton from tools.utils so the model
+        Calls the shared embedder singleton from mini_rag.utils so the model
         loads once per process and is reused at retrieval time too. The
         embedder's embed_documents API batches under the hood; returned
         vectors preserve input order so they can be paired with chunks

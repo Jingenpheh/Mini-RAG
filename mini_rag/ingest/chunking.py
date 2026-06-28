@@ -23,7 +23,7 @@ from config import (
     CHUNK_INCLUDED_LABELS,
     CHUNK_FORMULA_FAILED_MARKER,
 )
-from tools.ingest.schema import Chunk
+from mini_rag.ingest.schema import Chunk
 
 
 # ##############################################################################
@@ -158,7 +158,23 @@ def chunk_document(
         for piece in _split_long_text(text, CHUNK_SIZE_CEILING):
             finalized.append({"text": piece, "label": m["label"], "section": m["section"]})
 
-    # Pass 4: build Chunk records with full metadata
+    # Pass 4: contextualize chunk text with paper title + section heading.
+    # The prefix is included in chunk.text so it ends up embedded by SPECTER2
+    # and tokenized by BM25. This binds paper-level anchors (acronyms, system
+    # names) to every chunk in the paper, so queries that mention the paper
+    # name can find the chunks that contain the answer content even when the
+    # content itself doesn't repeat the paper's name. See DEVLOG.
+    paper_title = paper_meta.get("title", "")
+    for f in finalized:
+        prefix_parts = []
+        if paper_title:
+            prefix_parts.append(f"Paper: {paper_title}")
+        if f["section"]:
+            prefix_parts.append(f"Section: {f['section']}")
+        if prefix_parts:
+            f["text"] = "\n".join(prefix_parts) + "\n\n" + f["text"]
+
+    # Pass 5: build Chunk records with full metadata
     chunks: list[Chunk] = []
     for index, item in enumerate(finalized):
         chunk_id = f"{arxiv_id}::{index:05d}"
