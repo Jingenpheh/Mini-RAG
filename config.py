@@ -34,10 +34,8 @@ logging.getLogger("RapidOCR").setLevel(logging.ERROR)
 logging.getLogger("rapidocr").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
-# Suppress Docling's "plugin langchain_docling will not be loaded" message and
-# huggingface_hub's anonymous-download warning, both of which come through the
-# warnings module rather than logging.
-warnings.filterwarnings("ignore", message=".*langchain_docling.*")
+# Suppress huggingface_hub's anonymous-download warning, which comes through
+# the warnings module rather than logging.
 warnings.filterwarnings("ignore", message=".*unauthenticated requests.*")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
