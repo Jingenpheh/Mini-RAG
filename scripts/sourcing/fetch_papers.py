@@ -295,7 +295,7 @@ def fetch_eval_corpus() -> None:
     print(f"Already present: {already_present}. Failed: {failed}.")
     print(f"Manifest total: {len(manifest)} paper(s).")
     print()
-    print("Next step: python -m tools.ingest --debug")
+    print("Next step: python -m mini_rag.ingest --debug")
 
 
 # ##############################################################################

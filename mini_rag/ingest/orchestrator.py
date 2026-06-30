@@ -9,8 +9,6 @@
 #   parse_document -> quality_check -> scrub_pii -> chunk_document
 #       -> embed_chunks -> store_chunks
 #
-# Phase 2 wires chunking. Embedding and storage are stubs until Phase 3.
-#
 # Contents:
 #   Classes:
 #     Result                  - Outcome of processing one document

@@ -32,7 +32,7 @@ uv sync
 uv run --group sourcing python scripts/sourcing/fetch_papers.py --eval-corpus
 
 # 3) ingest all 50 papers (~30 min on CPU; SPECTER2 embedding is the slow part)
-python -m tools.ingest --debug
+python -m mini_rag.ingest --debug
 
 # 4) run the eval
 python -m tests.eval.run_eval
@@ -158,7 +158,7 @@ comparing two runs tells you exactly which code/config the deltas came from.
 
 1. Pick a paper, find a piece of content worth asking about.
 2. Phrase the question. Capture the exact gold answer text from the paper.
-3. Run `python -m tools.ingest --sample 1 --dry-run --debug` to inspect the
+3. Run `python -m mini_rag.ingest --sample 1 --dry-run --debug` to inspect the
    paper's chunks JSON at `debug/ingestion/<arxiv_id>_chunks.json`.
 4. Note which chunk_id(s) contain the gold answer.
 5. Append the entry to `golden_set.jsonl`. Update the typology table count.

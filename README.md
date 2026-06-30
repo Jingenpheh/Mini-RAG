@@ -41,7 +41,7 @@ Mini-RAG/
 │
 ├── mini_rag/                       ← library code (the package)
 │   ├── retriever.py                ← hybrid retrieval + cross-encoder rerank
-│   ├── utils.py                    ← shared singletons (embedder, vector store, BM25)
+│   ├── utils.py                    ← shared singletons (embedder, vector store)
 │   ├── mcp_server.py               ← MCP server (production interface)
 │   ├── check_setup.py              ← deployment verification utility
 │   └── ingest/                     ← ingestion pipeline subpackage
