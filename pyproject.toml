@@ -36,3 +36,11 @@ dependencies = [
 sourcing = [
     "arxiv>=2.1.0",
 ]
+dev = [
+    "pytest>=8.0.0",
+    "arxiv>=2.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["."]

@@ -138,6 +138,23 @@ python -m scripts.dev_agent
 
 This launches a LangChain ReAct agent with the same retrieval tools as the MCP server. Useful for sanity-checking changes locally.
 
+## Testing
+
+Two test rings, run independently:
+
+- `pytest tests/unit/` runs the fast unit tests (under 10 seconds, no network, no model loads). These pin pure-function behavior: chunking rules, metadata serialization, quality-check heuristics, RRF math, sourcing helpers, and the deployment-check functions.
+- `python tests/eval/run_eval.py` runs the integration eval: loads SPECTER2, parses real PDFs, hits Chroma, calls the LLM judge. Produces metrics (Recall@k, MRR, NDCG, RAGAS faithfulness / context recall / answer correctness) rather than pass/fail assertions.
+
+There is no middle ring. A slow integration test outside the eval would add maintenance cost without producing measurement signal, so it stays out.
+
+### What's not unit-tested, and why
+
+- `mini_rag/mcp_server.py` is thin MCP framework wiring. Testing it meaningfully needs an MCP client to talk to it; that integration belongs with the client, not with this repo.
+- `scripts/dev_agent.py` is LangChain agent wiring. Same shape: a meaningful test needs a live LLM. The dev agent exists for local interactive smoke checks, which is its own test surface.
+- Real Docling parsing, real SPECTER2 embedding, real Chroma round-trip, and real arXiv API calls live in the eval ring or get mocked at the boundary in unit tests.
+
+This split is the conscious choice. Coverage is intentionally not gated by percentage: each unit test pins a behavior that would matter if it broke, rather than reaching for a number.
+
 ## Configuration
 
 All configurable values live in `config.py` and most support environment-variable override. Common overrides:

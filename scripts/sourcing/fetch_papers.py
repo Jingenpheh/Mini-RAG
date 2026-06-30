@@ -114,6 +114,24 @@ def build_query() -> str:
 
 
 # ##############################################################################
+# arXiv ID canonicalization
+# ##############################################################################
+
+
+def canonical_arxiv_id(entry_id: str) -> str:
+    """Return the canonical arXiv ID for an entry, stripping any version suffix.
+
+    Args:
+        entry_id (str): Either a full arXiv URL ("http://arxiv.org/abs/2606.20457v2")
+            or a bare ID with or without version suffix.
+
+    Returns:
+        str: The canonical ID, e.g. "2606.20457".
+    """
+    return entry_id.rsplit("/", 1)[-1].split("v")[0]
+
+
+# ##############################################################################
 # Main fetch routine
 # ##############################################################################
 
@@ -161,8 +179,7 @@ def fetch_papers() -> None:
     # Process each result: dedupe, filter by date, download, record metadata
     for result in client.results(search):
 
-        # Canonical arXiv ID (strip version suffix like "v2")
-        arxiv_id = result.entry_id.rsplit("/", 1)[-1].split("v")[0]
+        arxiv_id = canonical_arxiv_id(result.entry_id)
 
         # Skip papers already in the manifest
         if arxiv_id in manifest:
@@ -255,8 +272,7 @@ def fetch_eval_corpus() -> None:
 
     for result in client.results(search):
 
-        # Canonical arXiv ID (strip version suffix like "v2")
-        arxiv_id = result.entry_id.rsplit("/", 1)[-1].split("v")[0]
+        arxiv_id = canonical_arxiv_id(result.entry_id)
 
         # Skip if PDF already on disk AND in manifest
         filename = f"{arxiv_id}.pdf"

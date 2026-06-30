@@ -48,6 +48,42 @@ _RRF_K = 60
 # to BM25 false positives polluting the fused result.
 _FUSION_TOP = 20
 
+
+# ##############################################################################
+# Reciprocal Rank Fusion
+# ##############################################################################
+
+
+def _rrf_fuse(
+    dense_ranks: dict[str, int],
+    bm25_ranks: dict[str, int],
+    k: int = _RRF_K,
+) -> dict[str, float]:
+    """Combine two ranked lists via Reciprocal Rank Fusion.
+
+    Args:
+        dense_ranks (dict[str, int]): id -> 1-based rank from dense retrieval.
+        bm25_ranks (dict[str, int]): id -> 1-based rank from BM25 retrieval.
+        k (int): RRF constant; standard value is 60. Lower amplifies the
+            weight of top ranks, higher smooths the fusion.
+
+    Approach:
+        Each id's score is the sum of `1 / (k + rank)` across both retrievers.
+        Ids missing from a retriever contribute approximately zero from that
+        side (their rank is treated as a very large number, so 1/(k+rank) tends to zero).
+
+    Returns:
+        dict[str, float]: id -> fused score. Sort descending for the
+            ranked-fusion order.
+    """
+    all_ids = set(dense_ranks) | set(bm25_ranks)
+    return {
+        cid: (1.0 / (k + dense_ranks.get(cid, 1e9)))
+        + (1.0 / (k + bm25_ranks.get(cid, 1e9)))
+        for cid in all_ids
+    }
+
+
 # BM25 index singleton. Built lazily on first retrieve() call from chunks
 # already in Chroma. Not shared with the ingestion pipeline since BM25 only
 # matters at query time.
@@ -174,13 +210,7 @@ def retrieve(query: str, k: int = TOP_K) -> list[Document]:
     bm25_top_idx = sorted(range(len(scores)), key=lambda i: -scores[i])[:_FUSION_TOP]
     bm25_ranks = {bm25._ids[i]: rank for rank, i in enumerate(bm25_top_idx, 1)}
 
-    # RRF fusion: each chunk's score sums reciprocal ranks from each retriever
-    all_ids = set(dense_ranks) | set(bm25_ranks)
-    rrf_scores = {
-        cid: (1.0 / (_RRF_K + dense_ranks.get(cid, 1e9)))
-        + (1.0 / (_RRF_K + bm25_ranks.get(cid, 1e9)))
-        for cid in all_ids
-    }
+    rrf_scores = _rrf_fuse(dense_ranks, bm25_ranks)
 
     # Take the top-RERANK_TOP for cross-encoder reranking (not top-k yet)
     rerank_pool_ids = sorted(rrf_scores, key=lambda c: -rrf_scores[c])[:RERANK_TOP]
