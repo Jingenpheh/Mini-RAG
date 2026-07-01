@@ -25,7 +25,7 @@
 #     eval://golden_set              - The 30-question golden eval set
 #     eval://latest_results          - Latest eval run record (last line of
 #                                       results.jsonl)
-#     eval://baseline_analysis       - The v1->v5 journey analysis markdown
+#     eval://baseline_analysis       - The v1->v6 journey analysis markdown
 #     eval://v4_per_question_diagnosis - Per-question diagnosis at v4
 #     corpus://manifest              - Inventory of ingested papers (JSON)
 # ##############################################################################
@@ -246,7 +246,7 @@ def latest_results_resource() -> str:
 
 @mcp.resource("eval://baseline_analysis")
 def baseline_analysis_resource() -> str:
-    """The v1 -> v5 cumulative journey analysis markdown.
+    """The v1 -> v6 cumulative journey analysis markdown.
 
     A reader-oriented narrative describing each iteration of Mini-RAG,
     the failures observed, the fixes applied, and the metric deltas.
