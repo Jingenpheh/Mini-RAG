@@ -10,7 +10,7 @@ For "what does this repo do today" the README has the headline numbers and stack
 
 ## 2. Summary and status
 
-The system is at v6. The MCP wrapper is in place. On a 30-question golden eval set drawn from the corpus, retrieval-side numbers went from Recall@5 = 0.103 at the v1 baseline to Recall@5 = 0.690 at v6 (about 6.7x), MRR went 0.059 to 0.541 (9.2x). RAGAS LLM-judged metrics: faithfulness went 0.634 to 0.882, context recall 0.169 to 0.619, answer correctness 0.267 to 0.458 (with a small -0.016 dip at the v5-to-v6 step; details in section 4.8). The README has the full headline table. The v5 to v6 step was an ablation-driven tokenizer change for BM25, not an architectural change.
+The system is at v6. The MCP wrapper is in place. On a 30-question golden eval set drawn from the corpus, retrieval-side numbers went from Recall@5 = 0.103 at the v1 baseline to Recall@5 = 0.690 at v6 (about 6.7x), MRR went 0.059 to 0.541 (9.2x). RAGAS LLM-judged metrics: faithfulness went 0.634 to 0.876, context recall 0.169 to 0.661, answer correctness 0.267 to 0.505. The README has the full headline table. The v5 to v6 step was an ablation-driven tokenizer change for BM25, not an architectural change.
 
 **Metrics in brief** (so the numbers below carry meaning even if these terms are unfamiliar):
 
@@ -375,17 +375,17 @@ The change in code: `mini_rag/retriever._default_tokenizer` is now `[porter.stem
 
 The ablation results (summary + per-type + per-question) are kept at `tests/ablation/bm25_tokenization_results.json` for reproducibility.
 
-**RAGAS metrics after adoption**: after the tokenizer swap I re-ran the main eval (`tests/eval/run_eval.py`) against the full 30-question set so the LLM-judged layer had numbers too. Retrieval-side matches the ablation exactly (Recall@5 = 0.690, MRR = 0.541), which confirms the production default is what the ablation measured. RAGAS deltas from v5:
+**RAGAS metrics after adoption**: after the tokenizer swap I re-ran the main eval (`tests/eval/run_eval.py`) against the full 30-question set so the LLM-judged layer had numbers too. Retrieval-side matches the ablation exactly (Recall@5 = 0.690, MRR = 0.541), which confirms the production default is what the ablation measured. RAGAS deltas from v5 (from the clean-commit re-run):
 
-- **Faithfulness**: 0.826 to 0.882 (+0.056). The generated answer is better grounded in the retrieved chunks.
-- **Context recall**: 0.608 to 0.619 (+0.011). Chunks now cover more of the gold answer material.
-- **Context precision** (not tracked in v5 headline): 0.746 at v6.
-- **Answer relevancy** (not tracked in v5 headline): 0.651 at v6.
-- **Answer correctness**: 0.474 to 0.458 (**-0.016**). The one metric that moved the wrong way at this step.
+- **Faithfulness**: 0.826 to 0.876 (+0.050). The generated answer is better grounded in the retrieved chunks.
+- **Context recall**: 0.608 to 0.661 (+0.053). Chunks now cover more of the gold answer material.
+- **Context precision** (not tracked in v5 headline): 0.749 at v6.
+- **Answer relevancy** (not tracked in v5 headline): 0.672 at v6.
+- **Answer correctness**: 0.474 to 0.505 (+0.031). Every RAGAS metric now moves in the retrieval-consistent direction.
 
-The answer-correctness dip is worth being honest about. It's probably within LLM-judge variance at n=30 (this is the metric that compares the generated answer text against the gold answer text via an LLM similarity call, and small wording differences can nudge the score). A plausible mechanism if it's real: richer retrieval pulls in more relevant context, and the minimal generator occasionally picks up adjacent phrasing that shifts the wording of the answer even when the substance matches the gold. Retrieval is unambiguously better; the answer-generation surface is where any noise now lives, and the generation surface is what the librarian agent in section 5 is meant to replace.
+**A note on LLM-judge variance**: the first v6 eval (2026-06-30) actually recorded `answer_correctness` at 0.458, which was a small -0.016 dip vs v5. I flagged it at the time, hedging that it was probably LLM-judge noise. That first run was against an uncommitted working tree, which is a reproducibility gap the review round-2 called out. Re-running on 2026-07-01 against clean HEAD f9b3d0f produced 0.505 (+0.031 vs v5), confirming the earlier "dip" was variance. Retrieval numbers were byte-identical between runs (dense + BM25 + rerank is deterministic); RAGAS moved by a few percentage points because the LLM judge is stochastic.
 
-Flagging this rather than hiding it. If the metric drifts further with future changes, that's a signal that the minimal-generator setup needs revisiting; if it holds or reverts, it was noise.
+Takeaway that stays in the writeup: LLM-judged scores at n=30 have real run-to-run variance. Anything under about ±0.03 shouldn't be treated as signal without a re-run or larger sample.
 
 ---
 

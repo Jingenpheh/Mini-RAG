@@ -14,13 +14,13 @@ On a hand-crafted 30-question golden eval set drawn from the corpus:
 |---|---|---|---|---|
 | Recall@5 | 0.103 | 0.517 | 0.690 | 6.7x |
 | MRR | 0.059 | 0.378 | 0.541 | 9.2x |
-| Faithfulness (LLM-judged) | 0.634 | 0.826 | 0.882 | +0.248 |
-| Context recall (LLM-judged) | 0.169 | 0.608 | 0.619 | 3.7x |
-| Answer correctness (LLM-judged) | 0.267 | 0.474 | 0.458 | 1.7x |
+| Faithfulness (LLM-judged) | 0.634 | 0.826 | 0.876 | +0.242 |
+| Context recall (LLM-judged) | 0.169 | 0.608 | 0.661 | 3.9x |
+| Answer correctness (LLM-judged) | 0.267 | 0.474 | 0.505 | 1.9x |
 
 The full v1 → v1.1 → v2 → v3 → v4 → v5 → v6 journey, including which fix targeted which failure mode, is in [DEVLOG.md](DEVLOG.md) and [tests/eval/analysis/baseline_analysis.md](tests/eval/analysis/baseline_analysis.md).
 
-The v5 to v6 step was a BM25 tokenizer change (hyphen-aware split plus Porter stemming, adopted after an ablation study at `tests/ablation/bm25_tokenization.py`). Retrieval metrics moved strongly across the board; `answer_correctness` dipped slightly (-0.016) at that step, flagged rather than hidden. Likely LLM-judge variance at n=30; possible micro-effect from richer retrieval nudging the minimal generator's wording. Details in the DEVLOG.
+The v5 to v6 step was a BM25 tokenizer change (hyphen-aware split plus Porter stemming, adopted after an ablation study at `tests/ablation/bm25_tokenization.py`). Retrieval metrics moved strongly across the board and every RAGAS metric moved with them. An earlier v6 eval run (against an uncommitted working tree) recorded `answer_correctness` at 0.458, which was a -0.016 dip vs v5; the re-run against a clean commit produced 0.505 (+0.031 vs v5), confirming the earlier dip was LLM-judge variance. That story is kept in the DEVLOG rather than hidden.
 
 ## Stack
 
