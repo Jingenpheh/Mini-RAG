@@ -336,11 +336,10 @@ def already_ingested(arxiv_id: str, config_hash: str) -> bool:
     Returns:
         bool: True if already ingested under the current config, else False.
     """
-    from mini_rag.utils import get_vector_store
+    from mini_rag import chroma_client
 
     try:
-        store = get_vector_store()
-        result = store._collection.get(
+        result = chroma_client.get_where(
             where={
                 "$and": [
                     {"arxiv_id": arxiv_id},

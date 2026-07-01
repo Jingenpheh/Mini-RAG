@@ -72,7 +72,10 @@ def test_check_vector_store_handles_unreachable_store(monkeypatch):
         def __getattr__(self, _):
             raise RuntimeError("not connected")
 
-    monkeypatch.setattr("mini_rag.utils.get_vector_store", lambda: _Boom())
+    # check_vector_store goes through mini_rag.chroma_client, which imported
+    # get_vector_store from mini_rag.utils at module load time. Patch at the
+    # chroma_client layer to intercept the call the check actually makes.
+    monkeypatch.setattr("mini_rag.chroma_client.get_vector_store", lambda: _Boom())
     ok, count, detail = check_vector_store()
     assert ok is False
     assert count == -1

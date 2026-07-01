@@ -10,7 +10,7 @@
 
 
 # Local
-from mini_rag.utils import get_vector_store
+from mini_rag import chroma_client
 from mini_rag.ingest.schema import Chunk
 
 
@@ -47,10 +47,7 @@ def store_chunks(chunks: list[Chunk], vectors: list[list[float]]) -> int:
             f"chunks ({len(chunks)}) and vectors ({len(vectors)}) length mismatch"
         )
 
-    store = get_vector_store()
-    collection = store._collection  # underlying Chroma collection for raw add
-
-    collection.add(
+    chroma_client.add(
         ids=[c.chunk_id for c in chunks],
         documents=[c.text for c in chunks],
         embeddings=vectors,

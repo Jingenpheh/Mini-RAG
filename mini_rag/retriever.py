@@ -31,6 +31,7 @@ from langchain_core.documents import Document
 
 # Local
 from config import TOP_K, RERANK_TOP, CROSS_ENCODER_MODEL
+from mini_rag import chroma_client
 from mini_rag.utils import get_vector_store
 
 
@@ -118,10 +119,9 @@ def _get_bm25():
     global _bm25
     if _bm25 is None:
         from rank_bm25 import BM25Okapi
-        store = get_vector_store()
-        if store._collection.count() == 0:
+        if chroma_client.is_empty():
             return None
-        result = store._collection.get(include=["documents", "metadatas"])
+        result = chroma_client.get_all(include=["documents", "metadatas"])
         corpus = [doc.lower().split() for doc in result["documents"]]
         bm25 = BM25Okapi(corpus)
         # Stash ancillary data on the instance for query-time lookup
@@ -193,9 +193,10 @@ def retrieve(query: str, k: int = TOP_K) -> list[Document]:
         list[Document]: Top-k Documents in reranked score order. Empty list
             if the knowledge base is empty.
     """
-    store = get_vector_store()
-    if store._collection.count() == 0:
+    if chroma_client.is_empty():
         return []
+
+    store = get_vector_store()
 
     # Dense retrieval: pull a wider net than k for fusion headroom
     dense_docs = store.similarity_search(query, k=_FUSION_TOP)
@@ -294,12 +295,10 @@ def list_sources() -> str:
     Returns:
         str: A summary line plus one row per document.
     """
-    store = get_vector_store()
-
-    if store._collection.count() == 0:
+    if chroma_client.is_empty():
         return "No documents ingested yet."
 
-    metadatas = store._collection.get()["metadatas"] or []
+    metadatas = chroma_client.get_all()["metadatas"] or []
 
     counts: Counter = Counter()
     titles: dict[str, str] = {}

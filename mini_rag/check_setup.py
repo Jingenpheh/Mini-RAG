@@ -121,9 +121,8 @@ def check_vector_store() -> tuple[bool, int, str]:
         collection. On error, count is -1 and detail carries the exception text.
     """
     try:
-        from mini_rag.utils import get_vector_store
-        store = get_vector_store()
-        count = store._collection.count()
+        from mini_rag import chroma_client
+        count = chroma_client.count()
         detail = "run `python -m mini_rag.ingest --debug` if empty" if count == 0 else ""
         return True, count, detail
     except Exception as e:
