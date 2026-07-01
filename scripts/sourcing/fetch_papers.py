@@ -25,15 +25,12 @@
 
 # Standard library
 import json
-import ssl
 import sys
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Third-party
 import arxiv
-import certifi
 
 # Local
 # SCRIPT_DIR must be defined and added to sys.path so we can find the project
@@ -51,20 +48,7 @@ from config import (  # noqa: E402
     SOURCING_PAPERS_DIR,
     SOURCING_MANIFEST_PATH,
 )
-
-
-# ##############################################################################
-# SSL trust store
-# ##############################################################################
-
-# urllib on Windows Python doesn't load a CA bundle by default, so HTTPS
-# certificate verification fails with CERTIFICATE_VERIFY_FAILED on arxiv PDF
-# downloads. Point the default SSL context at certifi's bundle so urllib
-# trusts the same CAs that requests does. Process-wide patch; fine for a CLI
-# script.
-ssl._create_default_https_context = lambda: ssl.create_default_context(
-    cafile=certifi.where()
-)
+from mini_rag.utils import download_pdf  # noqa: E402
 
 
 # ##############################################################################
@@ -195,7 +179,7 @@ def fetch_papers() -> None:
         filename = f"{arxiv_id}.pdf"
         title_preview = result.title.strip().replace("\n", " ")[:80]
         print(f"  Downloading {arxiv_id}: {title_preview}")
-        urllib.request.urlretrieve(result.pdf_url, str(PAPERS_DIR / filename))
+        download_pdf(result.pdf_url, PAPERS_DIR / filename)
 
         # Record metadata for dedup + downstream ingestion use
         manifest[arxiv_id] = {
@@ -281,11 +265,11 @@ def fetch_eval_corpus() -> None:
             already_present += 1
             continue
 
-        # Download the PDF
+        # Download the PDF (certifi-backed SSL context, no process-wide patch)
         title_preview = result.title.strip().replace("\n", " ")[:80]
         print(f"  Downloading {arxiv_id}: {title_preview}")
         try:
-            urllib.request.urlretrieve(result.pdf_url, str(pdf_path))
+            download_pdf(result.pdf_url, pdf_path)
         except Exception as e:
             print(f"    FAILED: {e}")
             failed += 1
