@@ -111,7 +111,7 @@ Code structure:
 
 ## Where things live
 
-- **`DEVLOG.md`** is the decision narrative, organized by topic. Read this to understand why X was chosen over Y in the project's history.
+- **`DEVLOG.md`** is the decision narrative. Structured as: project goal, summary + status (current stack, key design decisions, per-version table), design deep dives (ingestion, retrieval, evaluation, deferred decisions), v1 to v6 chronological journey, future improvements. The v1-era topical-structure DEVLOG is retained at `archive/DEVLOG.md` for reference.
 - **`memory/`** contains durable user preferences and feedback. Auto-loaded each session. Read at session start.
 - **Sibling Obsidian vault under "Retrieval Augmented Generation (RAG)"** has the conceptual knowledge map: spokes for Foundations, Ingestion, Query Understanding, Retrieval, Generation, RAG Architectures, Evaluation and Observability, Reliability and Operations. The map is the design reference. This repo is the concrete implementation of parts of it.
 - **This file (`CLAUDE.md`)** is the session-level briefing. Keep it lean. If something gets big enough to deserve its own doc, link to it from here instead of expanding inline.

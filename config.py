@@ -144,7 +144,7 @@ INGEST_QC_MIN_ABSTRACT_OVERLAP = 0.3
 # One chunk per docling doc_item, with a merge rule that combines consecutive
 # same-section same-label items below CHUNK_MERGE_FLOOR. Items under
 # CHUNK_DROP_FLOOR get dropped as noise. Items above CHUNK_SIZE_CEILING get
-# split on sentence boundaries. See DEVLOG > Ingestion Design > Chunking.
+# split on sentence boundaries. See DEVLOG section 3.1 (Ingestion).
 CHUNK_DROP_FLOOR = 30        # chars; below this, drop entirely
 CHUNK_MERGE_FLOOR = 200      # chars; below this, candidate for merging with neighbors
 CHUNK_SIZE_CEILING = 2000    # chars; above this, split on sentence boundaries

@@ -63,7 +63,7 @@ def parse_document(path: Path):
         Calls docling's DocumentConverter directly (not the langchain-docling
         DoclingLoader), so the downstream chunker has access to raw doc_items
         rather than a heuristically-pre-grouped chunker output. See DEVLOG
-        section "Ingestion Design > Chunking" for the reasoning.
+        section 3.1 (Ingestion) for the reasoning.
 
         This is the designated routing point for the future: when the system
         has to handle non-paper documents (forms, slides, scanned PDFs),

@@ -108,7 +108,7 @@ Artifact handling:
 - **Figures**: skipped at this stage. Captions arrive as their own
   `caption` doc_items and get included in the embedding pool.
 
-`DEVLOG.md` > Ingestion Design > Chunking has the reasoning for each choice.
+`DEVLOG.md` section 3.1 (Ingestion) has the reasoning for each choice.
 
 ## How to run ingestion
 

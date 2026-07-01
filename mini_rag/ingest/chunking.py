@@ -2,7 +2,7 @@
 # File: chunking.py
 # Purpose: Convert a parsed DoclingDocument into a list of Chunk records. One
 #          chunk per docling doc_item, with a small-item merge rule and a size
-#          safety net. See DEVLOG > Ingestion Design > Chunking.
+#          safety net. See DEVLOG section 3.1 (Ingestion) for the reasoning.
 #
 # Contents:
 #   Functions:
@@ -85,7 +85,7 @@ def chunk_document(
         # content lives in .orig (e.g. "Aff(2) = {(A t 0 1) : A ∈ GL(2,R) ...").
         # In v1 we dropped these silently; v2 falls back to .orig so equations
         # land in the index as auxiliary content attached to the preceding
-        # explanation chunk. See DEVLOG > Ingestion Design > Chunking.
+        # explanation chunk. See DEVLOG section 3.1 (Ingestion).
         if isinstance(item, FormulaItem):
             text = (item.text or "").strip()
             if not text:
