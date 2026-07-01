@@ -586,7 +586,7 @@ def main() -> None:
     if args.sample:
         print(f"  Sample:  first {args.sample} document(s)")
     if args.dry_run:
-        print(f"  Dry run: embed and store steps skipped")
+        print("  Dry run: embed and store steps skipped")
     if debug_dir:
         print(f"  Debug:   per-stage outputs to {debug_dir}/")
     print()

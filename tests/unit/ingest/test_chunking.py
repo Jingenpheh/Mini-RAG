@@ -7,7 +7,6 @@ types. This lets the full chunk_document() pipeline run without ever
 parsing a PDF.
 """
 
-import pytest
 
 from mini_rag.ingest.chunking import chunk_document
 from tests.conftest import (

@@ -7,7 +7,6 @@ ingestion runs work in environments without git on PATH.
 
 import subprocess
 
-import pytest
 
 from mini_rag.ingest import orchestrator
 

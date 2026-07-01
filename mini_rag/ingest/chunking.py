@@ -13,7 +13,7 @@
 
 # Standard library
 import re
-from typing import Any, Optional
+from typing import Any
 
 # Local
 from config import (
@@ -67,7 +67,6 @@ def chunk_document(
         TableItem,
         FormulaItem,
         TextItem,
-        TitleItem,
     )
 
     candidates: list[dict] = []

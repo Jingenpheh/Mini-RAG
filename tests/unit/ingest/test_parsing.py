@@ -5,7 +5,6 @@ synthetic and small; the real text-shape signals come from langdetect, which
 is mocked so the suite stays deterministic.
 """
 
-import pytest
 
 from mini_rag.ingest.parsing import quality_check
 

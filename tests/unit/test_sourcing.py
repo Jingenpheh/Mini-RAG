@@ -5,9 +5,7 @@ What's tested is the pure-Python logic that sits in front of the API:
 canonical ID derivation, query string composition, and manifest dedup.
 """
 
-import json
 
-import pytest
 
 
 def test_canonical_arxiv_id_strips_version_suffix():

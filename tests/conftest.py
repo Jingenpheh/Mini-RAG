@@ -9,13 +9,6 @@ resolve to the fakes for the duration of the test.
 """
 
 import pytest
-from docling_core.types.doc.document import (
-    FormulaItem,
-    SectionHeaderItem,
-    TableItem,
-    TextItem,
-    TitleItem,
-)
 
 
 class _FakeLabel:

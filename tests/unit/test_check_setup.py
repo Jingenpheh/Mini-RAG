@@ -6,9 +6,7 @@ code are not unit-tested here; that's covered by running the script in
 practice.
 """
 
-import os
 
-import pytest
 
 
 def test_check_openai_key_passes_when_env_set(monkeypatch):
