@@ -40,8 +40,18 @@ sourcing = [
 dev = [
     "pytest>=8.0.0",
     "arxiv>=2.1.0",
+    "ruff>=0.4.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+# Start conservative: E9 (syntax errors) and F (pyflakes: unused imports,
+# undefined names, unused variables). Add stylistic rules later once the
+# baseline is clean under this set.
+select = ["E9", "F"]

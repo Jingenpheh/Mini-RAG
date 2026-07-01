@@ -1,5 +1,7 @@
 # Mini-RAG
 
+[![CI](https://github.com/Jingenpheh/Mini-RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/Jingenpheh/Mini-RAG/actions/workflows/ci.yml)
+
 A research-paper retrieval system for arXiv ML/AI papers, exposed as an MCP server so external agents can use it as a tool.
 
 The system runs a five-stage retrieval pipeline (parse → chunk → embed → hybrid retrieve → cross-encoder rerank) over a corpus of arXiv ML/AI papers and answers natural-language questions about them. It was built as a portfolio piece exploring what production-grade RAG actually requires: iterated against an eval set, measured at every change, and exposed via MCP for consumption by agents.
@@ -182,4 +184,4 @@ For runtime tuning you set these env vars; for permanent project changes you edi
 
 ## License
 
-Personal project, no formal license. The arXiv papers in `docs/` are subject to their own arXiv licenses.
+MIT — see [LICENSE](LICENSE). The arXiv papers in `docs/` are subject to their own arXiv licenses.
