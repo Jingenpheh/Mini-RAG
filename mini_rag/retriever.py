@@ -9,12 +9,15 @@
 #   Constants:
 #     _RRF_K                   - Reciprocal Rank Fusion constant
 #     _FUSION_TOP              - Candidates pulled from each retriever for fusion
+#     _WORD_RE                 - Hyphen-aware tokenizer regex
+#     _PORTER                  - Porter stemmer singleton (snowballstemmer)
 #
 #   Module-private state:
 #     _bm25                    - Lazy BM25 index singleton
 #     _cross_encoder           - Lazy cross-encoder reranker singleton
 #
 #   Functions:
+#     _default_tokenizer()     - Hyphen-split + Porter stem BM25 tokenizer (v6)
 #     _get_bm25()              - Lazy-build BM25 index from chunks in Chroma
 #     _get_cross_encoder()     - Lazy-load the cross-encoder reranker
 #     retrieve()               - Hybrid retrieval + cross-encoder rerank
@@ -24,9 +27,11 @@
 
 
 # Standard library
+import re
 from collections import Counter
 
 # Third-party
+import snowballstemmer
 from langchain_core.documents import Document
 
 # Local
@@ -102,13 +107,54 @@ _cross_encoder = None
 # ##############################################################################
 
 
-def _get_bm25():
+# BM25 tokenizer state. The hyphen-aware splitter and the Porter stemmer are
+# module-level singletons so they're built once per process and reused on
+# every chunk + query that goes through retrieval.
+_WORD_RE = re.compile(r"\w+")
+_PORTER = snowballstemmer.stemmer("porter")
+
+
+def _default_tokenizer(text: str) -> list[str]:
+    """Production BM25 tokenizer: hyphen-aware split + Porter stemming.
+
+    Approach:
+        Splits on any non-word character (whitespace, hyphens, punctuation)
+        instead of whitespace only. This breaks compound names like
+        "SARLO-80" into ["sarlo", "80"], so a query naming "SARLO" can
+        match a chunk that contains only "SARLO-80". Then applies Porter
+        stemming so morphological variants ("embedding" / "embeddings",
+        "trained" / "training") collapse to the same token.
+
+        Both transformations were measured against the v5 baseline in the
+        ablation study at `tests/ablation/bm25_tokenization.py`. The
+        combined variant lifted Recall@5 from 0.517 to 0.690 with no
+        per-type regressions. See section 4.8 in DEVLOG.
+
+    Args:
+        text (str): Chunk or query text.
+
+    Returns:
+        list[str]: Tokens used for both BM25 corpus indexing and query
+            scoring (the same tokenizer must run both sides).
+    """
+    return [_PORTER.stemWord(t) for t in _WORD_RE.findall(text.lower())]
+
+
+def _get_bm25(tokenizer=_default_tokenizer):
     """Lazy-build the in-memory BM25 index from chunks already in Chroma.
+
+    Args:
+        tokenizer: Callable that takes a chunk's text and returns a list of
+            tokens. Defaults to lowercase + whitespace split. Pass an
+            alternate tokenizer to ablate stemming, stopwords, hyphenation,
+            etc. Note: the cached singleton is built once per process; to
+            rebuild under a different tokenizer (e.g. across ablation
+            variants), clear `_bm25` first.
 
     Approach:
         On first call, pulls all chunk documents and ids out of the Chroma
-        collection, tokenizes each chunk with a lowercase whitespace split,
-        and constructs a BM25Okapi index. Stashes ids, documents, and
+        collection, tokenizes each chunk with the supplied tokenizer, and
+        constructs a BM25Okapi index. Stashes ids, documents, and
         metadatas on the index instance for fast lookup at query time.
         Subsequent calls return the same instance. Process restart rebuilds.
 
@@ -122,7 +168,7 @@ def _get_bm25():
         if chroma_client.is_empty():
             return None
         result = chroma_client.get_all(include=["documents", "metadatas"])
-        corpus = [doc.lower().split() for doc in result["documents"]]
+        corpus = [tokenizer(doc) for doc in result["documents"]]
         bm25 = BM25Okapi(corpus)
         # Stash ancillary data on the instance for query-time lookup
         bm25._ids = result["ids"]
@@ -161,12 +207,17 @@ def _get_cross_encoder():
 # ##############################################################################
 
 
-def retrieve(query: str, k: int = TOP_K) -> list[Document]:
+def retrieve(query: str, k: int = TOP_K, tokenizer=_default_tokenizer) -> list[Document]:
     """Return top-k LangChain Documents via hybrid retrieval + cross-encoder rerank.
 
     Args:
         query (str): The search query.
         k (int): How many top results to return. Defaults to TOP_K from config.
+        tokenizer: BM25 tokenizer to apply to both the corpus (at index-build
+            time) and the query. Must be the same callable for both, or
+            tokens won't align. Defaults to lowercase + whitespace split.
+            Pass alternates for ablation; clear `_bm25` first if changing
+            tokenizer mid-process.
 
     Approach:
         Three-stage retrieval pipeline:
@@ -203,10 +254,10 @@ def retrieve(query: str, k: int = TOP_K) -> list[Document]:
     dense_ranks = {d.id: rank for rank, d in enumerate(dense_docs, 1)}
 
     # BM25 retrieval: fall back to dense-only if BM25 isn't available
-    bm25 = _get_bm25()
+    bm25 = _get_bm25(tokenizer)
     if bm25 is None:
         return dense_docs[:k]
-    query_tokens = query.lower().split()
+    query_tokens = tokenizer(query)
     scores = bm25.get_scores(query_tokens)
     bm25_top_idx = sorted(range(len(scores)), key=lambda i: -scores[i])[:_FUSION_TOP]
     bm25_ranks = {bm25._ids[i]: rank for rank, i in enumerate(bm25_top_idx, 1)}

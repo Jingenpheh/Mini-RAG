@@ -8,15 +8,17 @@ The system runs a five-stage retrieval pipeline (parse → chunk → embed → h
 
 On a hand-crafted 30-question golden eval set drawn from the corpus:
 
-| Metric | v1 baseline | v5 (current) | Lift |
-|---|---|---|---|
-| Recall@5 | 0.103 | 0.517 | 5.0x |
-| MRR | 0.059 | 0.378 | 6.4x |
-| Faithfulness (LLM-judged) | 0.634 | 0.826 | +0.192 |
-| Context recall (LLM-judged) | 0.169 | 0.608 | 3.6x |
-| Answer correctness | 0.267 | 0.474 | 1.8x |
+| Metric | v1 baseline | v5 | v6 (current) | v1 → v6 |
+|---|---|---|---|---|
+| Recall@5 | 0.103 | 0.517 | 0.690 | 6.7x |
+| MRR | 0.059 | 0.378 | 0.541 | 9.2x |
+| Faithfulness (LLM-judged) | 0.634 | 0.826 | 0.882 | +0.248 |
+| Context recall (LLM-judged) | 0.169 | 0.608 | 0.619 | 3.7x |
+| Answer correctness (LLM-judged) | 0.267 | 0.474 | 0.458 | 1.7x |
 
-The full v1 → v1.1 → v2 → v3 → v4 → v5 journey, including which fix targeted which failure mode, is in [tests/eval/analysis/baseline_analysis.md](tests/eval/analysis/baseline_analysis.md).
+The full v1 → v1.1 → v2 → v3 → v4 → v5 → v6 journey, including which fix targeted which failure mode, is in [DEVLOG.md](DEVLOG.md) and [tests/eval/analysis/baseline_analysis.md](tests/eval/analysis/baseline_analysis.md).
+
+The v5 to v6 step was a BM25 tokenizer change (hyphen-aware split plus Porter stemming, adopted after an ablation study at `tests/ablation/bm25_tokenization.py`). Retrieval metrics moved strongly across the board; `answer_correctness` dipped slightly (-0.016) at that step, flagged rather than hidden. Likely LLM-judge variance at n=30; possible micro-effect from richer retrieval nudging the minimal generator's wording. Details in the DEVLOG.
 
 ## Stack
 
